@@ -42,11 +42,21 @@ public:
 	inline Vector toWorld(const Vector &v) const {
 		return shFrame.toWorld(v);
 	}
+  	inline Vector toWorldCoherent(const Vector& v) const {
+		Frame cF(shFrame.n);
+		coordinateSystemCoherent(cF.n, cF.s, cF.t);
+		return cF.toWorld(v);
+	}
 
 	/// Convert a world-space vector into local shading coordinates
 	inline Vector toLocal(const Vector &v) const {
 		return shFrame.toLocal(v);
 	}
+    inline Vector toLocalCoherent(const Vector& v) const {
+      Frame cF(shFrame.n);
+      coordinateSystemCoherent(cF.n, cF.s, cF.t);
+      return cF.toLocal(v);
+    }
 
 	/// Is the current intersection valid?
 	inline bool isValid() const {
@@ -135,7 +145,7 @@ public:
 	Float t;
 
 	/* Intersection point in 3D coordinates */
-	Point p;
+	Point p, px, py;
 
 	/// Geometry frame
 	Frame geoFrame;
@@ -151,6 +161,9 @@ public:
 
 	/// UV partials wrt. changes in screen-space
 	Float dudx, dudy, dvdx, dvdy;
+
+	/// The derivatives of the normal vector with respect to the UV parameterization. Troes
+	Vector dndu, dndv;
 
 	/// Time value associated with the intersection
 	Float time;

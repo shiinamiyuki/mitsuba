@@ -25,9 +25,9 @@
 MTS_NAMESPACE_BEGIN
 
 ParticleProcess::ParticleProcess(EMode mode, size_t workCount, size_t granularity,
-		const std::string &progressText, const void *progressReporterPayload)
+		const std::string &progressText, const void *progressReporterPayload, bool adjointCompensation)
 	: m_mode(mode), m_workCount(workCount), m_numGenerated(0),
-	  m_granularity(granularity), m_receivedResultCount(0) {
+	  m_granularity(granularity), m_receivedResultCount(0), m_adjointCompensation(adjointCompensation) {
 
 	/* Choose a suitable work unit granularity if none was specified */
 	if (m_granularity == 0)
@@ -53,6 +53,7 @@ ParallelProcess::EStatus ParticleProcess::generateWork(WorkUnit *unit, int worke
 			return EFailure; // There is no more work
 
 		workUnitSize = std::min(m_granularity, m_workCount - m_numGenerated);
+		
 	} else {
 		if (m_receivedResultCount >= m_workCount)
 			return EFailure; // There is no more work
@@ -72,8 +73,10 @@ void ParticleProcess::increaseResultCount(size_t resultCount) {
 	m_progress->update(m_receivedResultCount);
 }
 
-ParticleTracer::ParticleTracer(int maxDepth, int rrDepth, bool emissionEvents)
-	: m_maxDepth(maxDepth), m_rrDepth(rrDepth), m_emissionEvents(emissionEvents) { }
+ParticleTracer::ParticleTracer(int maxDepth, int rrDepth, bool emissionEvents, bool adjointCompensation)
+	: m_maxDepth(maxDepth), m_rrDepth(rrDepth), m_emissionEvents(emissionEvents),
+      m_adjointCompensation(adjointCompensation)
+{ }
 
 ParticleTracer::ParticleTracer(Stream *stream, InstanceManager *manager)
 	: WorkProcessor(stream, manager) {
@@ -113,7 +116,6 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 	bool needsTimeSample  = sensor->needsTimeSample();
 	PositionSamplingRecord pRec(sensor->getShutterOpen()
 		+ 0.5f * sensor->getShutterOpenTime());
-	Ray ray;
 
 	m_sampler->generate(Point2i(0));
 
@@ -128,7 +130,10 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 		const Medium *medium;
 
 		Spectrum power;
-		Ray ray;
+		RayDifferential ray, prevRay;		//can possibly have differential if emitter support it
+
+		// Call the callback for creating new path
+		handleNewPath();
 
 		if (m_emissionEvents) {
 			/* Sample the position and direction component separately to
@@ -146,6 +151,8 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 			ray.setTime(pRec.time);
 			ray.setOrigin(pRec.p);
 			ray.setDirection(dRec.d);
+
+			handleSetRayDifferentialFromEmitter(ray, pRec, dRec);
 		} else {
 			/* Sample both components together, which is potentially
 			   faster / uses a better sampling strategy */
@@ -156,11 +163,16 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 			handleNewParticle();
 		}
 
+		handleCastNewParticule(ray, medium, power, emitter);
+
 		int depth = 1, nullInteractions = 0;
 		bool delta = false;
+		bool lastNullInteraction = false;
 
 		Spectrum throughput(1.0f); // unitless path throughput (used for russian roulette)
 		while (!throughput.isZero() && (depth <= m_maxDepth || m_maxDepth < 0)) {
+			prevRay = ray;		//backup ray
+
 			m_scene->rayIntersectAll(ray, its);
 
             /* ==================================================================== */
@@ -170,6 +182,7 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 				/* Sample the integral
 				  \int_x^y tau(x, x') [ \sigma_s \int_{S^2} \rho(\omega,\omega') L(x,\omega') d\omega' ] dx'
 				*/
+
 
 				throughput *= mRec.sigmaS * mRec.transmittance / mRec.pdfSuccess;
 
@@ -181,9 +194,10 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 
 				throughput *= medium->getPhaseFunction()->sample(pRec, m_sampler);
 				delta = false;
+				lastNullInteraction = false;
 
-				ray = Ray(mRec.p, pRec.wo, ray.time);
-				ray.mint = 0;
+                handleMediumInteractionScattering(mRec, pRec, ray);
+
 			} else if (its.t == std::numeric_limits<Float>::infinity()) {
 				/* There is no surface in this direction */
 				break;
@@ -201,6 +215,7 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 				handleSurfaceInteraction(depth, nullInteractions, delta, its, medium, throughput*power);
 
 				BSDFSamplingRecord bRec(its, m_sampler, EImportance);
+
 				Spectrum bsdfWeight = bsdf->sample(bRec, m_sampler->next2D());
 				if (bsdfWeight.isZero())
 					break;
@@ -219,12 +234,14 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 				if (its.isMediumTransition())
 					medium = its.getTargetMedium(woDotGeoN);
 
-				if (bRec.sampledType & BSDF::ENull)
+				if (bRec.sampledType & BSDF::ENull) {
 					++nullInteractions;
-				else
+					lastNullInteraction = true;
+				} else {
 					delta = bRec.sampledType & BSDF::EDelta;
-
-#if 0
+					lastNullInteraction = false;
+				}
+#ifndef MTS_NOSHADINGNORMAL
 				/* This is somewhat unfortunate: for accuracy, we'd really want the
 				   correction factor below to match the path tracing interpretation
 				   of a scene with shading normals. However, this factor can become
@@ -241,14 +258,15 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 				   that incorporate these extra terms */
 
 				/* Adjoint BSDF for shading normals -- [Veach, p. 155] */
-				throughput *= std::abs(
-					(Frame::cosTheta(bRec.wi) * woDotGeoN)/
-					(Frame::cosTheta(bRec.wo) * wiDotGeoN));
+                if(m_adjointCompensation) {
+                    throughput *= std::abs(
+                        (Frame::cosTheta(bRec.wi) * woDotGeoN)/
+                        (Frame::cosTheta(bRec.wo) * wiDotGeoN));
+                }
 #endif
 
-				ray.setOrigin(its.p);
-				ray.setDirection(wo);
-				ray.mint = Epsilon;
+                //update differential part of ray
+                handleSurfaceInteractionScattering(bRec, ray);
 			}
 
 			if (depth++ >= m_rrDepth) {
@@ -261,7 +279,18 @@ void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
 					break;
 				throughput /= q;
 			}
+
+			if(depth <= m_maxDepth || m_maxDepth < 0) {
+				handledBounce(depth, nullInteractions, delta,
+									ray.o, medium,
+									lastNullInteraction,
+									throughput*power);
+
+                handleSetRayDifferential(ray);
+			}
 		}
+
+		handleFinishParticule(); // New path will be emitted
 	}
 }
 
@@ -269,14 +298,45 @@ void ParticleTracer::handleEmission(const PositionSamplingRecord &pRec,
 		const Medium *medium, const Spectrum &weight) { }
 
 void ParticleTracer::handleNewParticle() { }
+void ParticleTracer::handleFinishParticule() { }
+void ParticleTracer::handleNewPath() { }
+void ParticleTracer::handleCastNewParticule(const RayDifferential& ray, const Medium* medium, const Spectrum& power, const Emitter *emitter) {
+}
+
+void ParticleTracer::handleSetRayDifferentialFromEmitter(RayDifferential &ray,
+                                                         const PositionSamplingRecord &pRec,
+                                                         const DirectionSamplingRecord &dRec){
+}
+
+void ParticleTracer::handleSetRayDifferential(const RayDifferential &ray){
+}
+
+void ParticleTracer::handledBounce(int depth, int nullInteractions,
+	bool delta, const Point &p, const Medium *medium, bool wasNullInteraction,
+	const Spectrum &weight) { }
 
 void ParticleTracer::handleSurfaceInteraction(int depth, int nullInteractions,
-	bool delta, const Intersection &its, const Medium *medium,
-	const Spectrum &weight) { }
+									     bool delta, const Intersection &its, const Medium *medium,
+									     const Spectrum &weight) {}
+void ParticleTracer::handleSurfaceInteractionScattering(const BSDFSamplingRecord& bRec,
+                                                        RayDifferential &ray) {
+    ray.setOrigin(bRec.its.p);
+    ray.setDirection(bRec.its.toWorld(bRec.wo));
+    ray.mint = Epsilon;
+}
+
 
 void ParticleTracer::handleMediumInteraction(int depth, int nullInteractions,
 	bool delta, const MediumSamplingRecord &mRec, const Medium *medium,
 	const Vector &wi, const Spectrum &weight) { }
+
+void ParticleTracer::handleMediumInteractionScattering(const MediumSamplingRecord &mRec, const PhaseFunctionSamplingRecord &pRec,
+                                                       RayDifferential &ray) {
+    // Update the ray differential
+    ray = RayDifferential(mRec.p, pRec.wo, ray.time);
+    ray.mint = 0;
+    ray.hasDifferentials = false;
+}
 
 MTS_IMPLEMENT_CLASS(RangeWorkUnit, false, WorkUnit)
 MTS_IMPLEMENT_CLASS(ParticleProcess, true, ParallelProcess)

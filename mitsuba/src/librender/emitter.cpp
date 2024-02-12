@@ -65,6 +65,10 @@ Spectrum AbstractEmitter::samplePosition(PositionSamplingRecord &pRec,
 	NotImplementedError("samplePosition");
 }
 
+Float AbstractEmitter::getFlux() const {
+	NotImplementedError("getFlux");
+}
+
 Spectrum AbstractEmitter::sampleDirection(DirectionSamplingRecord &dRec,
 		PositionSamplingRecord &pRec, const Point2 &sample,
 		const Point2 *extra) const {

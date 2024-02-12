@@ -156,7 +156,7 @@ private:
  *
  */
 #define MTS_DECLARE_CLASS() \
-	virtual const Class *getClass() const; \
+	virtual const Class *getClass() const override; \
 public: \
 	static Class *m_theClass;
 

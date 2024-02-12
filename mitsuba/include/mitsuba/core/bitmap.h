@@ -1227,6 +1227,9 @@ public:
 	/// Access the underlying raster data (for float32/float64 bitmaps)
 	inline Float *getFloatData() { return (Float *) m_data; }
 
+	/// Access the underlying raster data (for float32/float64 bitmaps)
+	inline Vector *getV3Data() { return (Vector *) m_data; }
+
 	/// Access the underlying raster data (for float/float64 bitmaps, const version)
 	inline const Float *getFloatData() const { return (const Float *) m_data; }
 

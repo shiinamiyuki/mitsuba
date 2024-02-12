@@ -40,22 +40,28 @@ MTS_NAMESPACE_BEGIN
 class MTS_EXPORT_RENDER ImageBlock : public WorkResult {
 public:
 	/**
-	 * Construct a new image block of the requested properties
-	 *
-	 * \param fmt
-	 *    Specifies the pixel format -- see \ref Bitmap::EPixelFormat
-	 *    for a list of possibilities
-	 * \param size
-	 *    Specifies the block dimensions (not accounting for additional
-	 *    border pixels required to support image reconstruction filters)
-	 * \param channels
-	 *    Specifies the number of output channels. This is only necessary
-	 *    when \ref Bitmap::EMultiChannel is chosen as the pixel format
-	 * \param warn
-	 *    Warn when writing bad sample values?
-	 */
+	* Construct a new image block of the requested properties
+	*
+	* \param fmt
+	*    Specifies the pixel format -- see \ref Bitmap::EPixelFormat
+	*    for a list of possibilities
+	* \param size
+	*    Specifies the block dimensions (not accounting for additional
+	*    border pixels required to support image reconstruction filters)
+	* \param channels
+	*    Specifies the number of output channels. This is only necessary
+	*    when \ref Bitmap::EMultiChannel is chosen as the pixel format
+	* \param warn
+	*    Warn when writing bad sample values?
+	* \param extraBorder
+	*	 Optional extraBorder (used for gradient-domain algorithms to access neighboring pixels)
+	*/
 	ImageBlock(Bitmap::EPixelFormat fmt, const Vector2i &size,
-			const ReconstructionFilter *filter = NULL, int channels = -1, bool warn = true);
+		const ReconstructionFilter *filter = NULL, int channels = -1, bool warn = true, int extraborder = 0);
+
+
+	inline void setAllowNegativeValues(bool b) { m_allowNegative = b; } //marco: manually allow to accept negative vlaues!
+
 
 	/// Set the current block offset
 	inline void setOffset(const Point2i &offset) { m_offset = offset; }
@@ -93,7 +99,7 @@ public:
 	/// Return a pointer to the underlying bitmap representation
 	inline Bitmap *getBitmap() { return m_bitmap; }
 
-    /// Return a pointer to the underlying bitmap representation
+	 /// Return a pointer to the underlying bitmap representation
     inline const ReconstructionFilter *getReconstructionFilter() const { return m_filter; }
 
 	/// Return a pointer to the underlying bitmap representation (const version)
@@ -149,7 +155,7 @@ public:
 
 		/* Check if all sample values are valid */
 		for (int i=0; i<channels; ++i) {
-			if (EXPECT_NOT_TAKEN((!std::isfinite(value[i]) || value[i] < 0) && m_warn))
+			if (EXPECT_NOT_TAKEN((!std::isfinite(value[i]) || ((!m_allowNegative && value[i] < 0) && m_warn))))
 				goto bad_sample;
 		}
 
@@ -245,9 +251,13 @@ protected:
 	const ReconstructionFilter *m_filter;
 	Float *m_weightsX, *m_weightsY;
 	bool m_warn;
+	bool m_allowNegative;
 };
 
 
 MTS_NAMESPACE_END
 
 #endif /* __MITSUBA_RENDER_IMAGEBLOCK_H_ */
+
+
+

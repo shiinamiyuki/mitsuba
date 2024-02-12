@@ -66,13 +66,14 @@ enum RayConnection {
 /// Describes the state of a ray that is being traced in the scene.
 struct RayState {
     RayState()
-            : radiance(0.0f),
-              gradient(0.0f),
-              eta(1.0f),
-              pdf(1.0f),
-              throughput(Spectrum(0.0f)),
-              alive(true),
-              connection_status(RAY_NOT_CONNECTED) {}
+        :   pdf(1.0f),
+            radiance(0.0f),
+            gradient(0.0f),
+             
+            eta(1.0f),              
+            throughput(Spectrum(0.0f)),
+            alive(true),
+            connection_status(RAY_NOT_CONNECTED) {}
 
     /// Adds radiance to the ray.
     inline void addRadiance(const Spectrum &contribution, Float weight) {

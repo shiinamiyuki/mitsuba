@@ -40,7 +40,7 @@ public:
     this->maxDepth = maxDepth;
     this->gatherBlocks = &gatherPoints;
     this->offset = &offset;
-    this->techniques = techniques;
+    // this->techniques = techniques;
 
     // And then initialise the samplers
     // without shift in the random
@@ -416,30 +416,30 @@ protected:
 
 protected:
   // === Config attributs
-  Scene *scene;
-  int maxDepth;
+  Scene *scene{};
+  int maxDepth{};
 
   // === Gather blocks attributes
-  std::vector<std::vector<GatherPoint>> *gatherBlocks;
+  std::vector<std::vector<GatherPoint>> *gatherBlocks{};
   const std::vector<Point2i> *offset;
 
   // === Sampler attributes
-  ref_vector<Sampler> samplers;
+  ref_vector<Sampler> samplers{};
 
   // In the reference mode, the sampler are initialized
   // randomly to be sure to not have the same
   // sequence of gather points generated
-  bool referenceMod;
+  bool referenceMod{};
 
   // Used techniques
-  int techniques;
+  int techniques{};
 
   // Bounce constant decision
-  Float m_shiftThreshold;
-  bool m_directTracing;
+  Float m_shiftThreshold{};
+  bool m_directTracing{};
 
   // Initial radius (same as VCM)
-  Float m_initialRadius;
+  Float m_initialRadius{};
 };
 
 MTS_NAMESPACE_END

@@ -60,13 +60,13 @@ bool mediumRotationShift(ShiftRecord &sRec,
   // by copying the local dot product of the orignal W0 and W1 vectors
   Float w0Dot = dot(e0->d, e1->d);
   // sqrt(1 - (w0Dot*w0Dot)) -> pythagore
-  newW1 = sqrt(1 - (w0Dot * w0Dot)) * orthNewW1 + e0->d * w0Dot;
+  newW1 = std::sqrt(Float(1.0) - (w0Dot * w0Dot)) * orthNewW1 + e0->d * w0Dot;
 
   // Check that the new plane does is still valid. For that we need to check
   // - t0New and t1New are valid (> 0)
   // - visibility if t0New > t0
   // - visibility between a2p and a1p
-  Float t0New, t1New;
+  Float t0New{}, t1New{};
   Vector d0New = e0->d;
   if (!intersectionMediumShift(shiftRay, a0->getPosition(), e0->d, newW1,
                                t0New, t1New)) {

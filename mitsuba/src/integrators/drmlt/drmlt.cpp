@@ -191,7 +191,7 @@ public:
             If set to <tt>path</tt>, the MLT algorithm runs on top of a
             to a basic path tracer. */
         m_config.technique = [&]() -> PathSampler::ETechnique {
-            auto integrator = props.getString("technique");
+            auto integrator = props.getString("technique", "mmlt");
             if (integrator == "path") {
                 return PathSampler::EUnidirectional;
             } else if (integrator == "bdpt") {

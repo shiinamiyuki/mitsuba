@@ -82,7 +82,7 @@ public:
   }
 };
 
-class SurfaceGradientRecord;
+struct SurfaceGradientRecord;
 class VolumeGradientRecord;
 class GPhotonMap : public SerializableObject {
 public:

@@ -45,7 +45,7 @@ public:
         m_random.clear();
 
         Spectrum base_value = Li(rays[id_main].ray, rays[id_main].rRec);
-        Float q = std::min(std::max(base_value.max(), m_config->rrShift), 1.0);
+        Float q = std::min<Float>(std::max<Float>(base_value.max(), m_config->rrShift), 1.0);
         if (q >= rays[id_main].rRec.sampler->next1D()) {
             std::vector<Spectrum> contributions(secondaryCount, Spectrum(0.f));
             Float w = 1.0 / q;
@@ -71,7 +71,7 @@ public:
         m_random.clear();
 
         Spectrum base_value = Li(main.ray, main.rRec);
-        Float q = std::min(std::max(base_value.max(), m_config->rrShift), 1.0);
+        Float q = std::min<Float>(std::max<Float>(base_value.max(), m_config->rrShift), 1.0);
         if (q >= main.rRec.sampler->next1D()) {
             Float w = 1.0 / q;
             for (int i = 0; i < secondaryCount; ++i) {

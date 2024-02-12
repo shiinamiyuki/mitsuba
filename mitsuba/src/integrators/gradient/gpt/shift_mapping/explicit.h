@@ -41,7 +41,7 @@ public:
         // Nothing
         trace_base(main, out_veryDirect);
         Spectrum base_value = evalute_base(main);
-        Float q = std::min(std::max(base_value.max(), m_config->rrShift), 1.0);
+        Float q = std::min<Float>(std::max<Float>(base_value.max(), m_config->rrShift), 1.0);
         if (q >= main.rRec.sampler->next1D()) {
             Float w = 1.0 / q;
             evaluate_gradients(main, shiftedRays, secondaryCount);
@@ -60,7 +60,7 @@ public:
 
         trace_base(rays[id_main], out_veryDirect);
         Spectrum base_value = evalute_base(rays[id_main]);
-        Float q = std::min(std::max(base_value.max(), m_config->rrShift), 1.0);
+        Float q = std::min<Float>(std::max<Float>(base_value.max(), m_config->rrShift), 1.0);
         if (q >= rays[id_main].rRec.sampler->next1D()) {
             Float w = 1.0 / q;
             // TODO: Clean this code

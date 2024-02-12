@@ -59,7 +59,7 @@ protected:
 private:
   std::vector<Path *> m_lightPaths;
 };
-
+static GPMConfig dummy_config{};
 /**
  * This class does the actual photon tracing work
  */
@@ -72,7 +72,7 @@ public:
       m_myThdata(&thdata[workerID]), m_beamRadius(beamRadius) {}
 
   GradientPhotonWorker(Stream *stream, InstanceManager *manager)
-      : WorkProcessor(stream, manager), m_config(GPMConfig()) {
+      : WorkProcessor(stream, manager), m_config(dummy_config) {
     SLog(EError, "No serialization for GPM");
   }
 

@@ -319,6 +319,16 @@ void Scene::invalidate() {
 	m_kdtree = new ShapeKDTree();
 }
 
+void Scene::weightEmitterFlux() {
+	m_emitterPDF.clear();
+
+	for (ref_vector<Emitter>::iterator it = m_emitters.begin();
+		 it != m_emitters.end(); ++it)
+		m_emitterPDF.append(it->get()->getFlux());
+
+	m_emitterPDF.normalize();
+}
+
 void Scene::initialize() {
 	if (!m_kdtree->isBuilt()) {
 		/* Expand all geometry */
@@ -455,8 +465,49 @@ void Scene::cancel() {
 	m_integrator->cancel();
 }
 
-void Scene::flush(RenderQueue *queue, const RenderJob *job) {
-	m_sensor->getFilm()->develop(this, queue->getRenderTime(job));
+bool Scene::flush(RenderQueue *queue, const RenderJob *job, size_t iteration) {
+    if (!m_dumpImages) return false;
+
+    std::string scenePath = this->getDestinationFile().string();
+    fs::path partialDir = scenePath;// + "_" + "partial";
+
+    std::string sceneName = fs::path(scenePath).filename().c_str();
+
+    if (!fs::exists(partialDir))
+        fs::create_directory(partialDir);
+
+    if (iteration == 0) {
+        m_sensor->getFilm()->develop(this, queue->getRenderTime(job));
+    } else {
+        auto timeFile = [&]() -> std::ofstream {
+            std::string filename = sceneName + "_time.csv";
+            fs::path filepath = partialDir / fs::path(filename);
+            if (iteration == 1) {
+                return std::ofstream(filepath.c_str(), std::ofstream::out | std::ofstream::trunc);
+            } else {
+                return std::ofstream(filepath.c_str(), std::ofstream::out | std::ofstream::app);
+            }
+        }();
+        auto statsFile = [&]() -> std::ofstream {
+            std::string filename = sceneName + "_stats.txt";
+            fs::path filepath = partialDir / fs::path(filename);
+            return std::ofstream(filepath.c_str(), std::ofstream::out | std::ofstream::trunc);
+        }();
+        auto film = m_sensor->getFilm();
+        std::stringstream ss;
+        ss << this->getDestinationFile().string() << "_" << iteration;
+        fs::path filename = ss.str();
+        fs::path path = partialDir / filename.filename();
+
+        Float renderTime = queue->getRenderTime(job);
+        film->setDestinationFile(path, 0);
+        film->develop(this, renderTime);
+
+        statsFile << Statistics::getInstance()->getStats();
+        timeFile << renderTime << ",\n";
+    }
+
+    return true;
 }
 
 void Scene::setDestinationFile(const fs::path &name) {
@@ -850,6 +901,63 @@ Spectrum Scene::sampleEmitterDirect(DirectSamplingRecord &dRec,
 		return Spectrum(0.0f);
 	}
 }
+
+
+std::pair<Spectrum, bool> Scene::sampleEmitterDirectVisible(DirectSamplingRecord &dRec,
+		const Point2 &_sample) const {
+	Point2 sample(_sample);
+
+	/* Randomly pick an emitter */
+	Float emPdf;
+	size_t index = m_emitterPDF.sampleReuse(sample.x, emPdf);
+	const Emitter *emitter = m_emitters[index].get();
+	Spectrum value = emitter->sampleDirect(dRec, sample);
+
+	dRec.object = emitter;
+	dRec.pdf *= emPdf;
+	value /= emPdf;
+
+	{
+		Ray ray(dRec.ref, dRec.d, Epsilon,
+				dRec.dist*(1-ShadowEpsilon), dRec.time);
+
+		if (m_kdtree->rayIntersect(ray)) {
+			return std::make_pair(Spectrum(0.0f), false);
+		}
+	}
+
+	return std::make_pair(value, true);
+}
+
+std::pair<Spectrum, bool> Scene::sampleAttenuatedEmitterDirectVisible(DirectSamplingRecord &dRec,
+																	  const Medium *medium,
+																	  int &interactions,
+																	  const Point2 &_sample,
+																	  Sampler *sampler, bool isSurface) const {
+	Point2 sample(_sample);
+
+	/* Randomly pick an emitter */
+	Float emPdf;
+	size_t index = m_emitterPDF.sampleReuse(sample.x, emPdf);
+	const Emitter *emitter = m_emitters[index].get();
+	Spectrum value = emitter->sampleDirect(dRec, sample);
+
+	dRec.object = emitter;
+	dRec.pdf *= emPdf;
+	value /= emPdf;
+
+	{
+		Spectrum trans = evalTransmittance(dRec.ref, isSurface,
+										   dRec.p, emitter->isOnSurface(), dRec.time, medium,
+										   interactions, sampler);
+		if(trans.isZero()) {
+			return std::make_pair(Spectrum(0.0f), false);
+		}
+		value *= trans;
+	}
+
+	return std::make_pair(value, true);
+};
 
 Spectrum Scene::sampleAttenuatedEmitterDirect(DirectSamplingRecord &dRec,
 		const Medium *medium, int &interactions, const Point2 &_sample, Sampler *sampler) const {

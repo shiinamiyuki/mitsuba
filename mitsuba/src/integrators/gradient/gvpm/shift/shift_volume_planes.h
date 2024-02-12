@@ -252,6 +252,7 @@ public:
                                                  bRec.tCam, bRec.tCam);
       result.weight = 1.0f / (1.0f + sensorPart * result.jacobian * (offsetPdf / basePdf));
     }
+    return true;
   }
 
 #define BETTERSHIFT 0
@@ -299,7 +300,7 @@ public:
     // by copying the local dot product of the orignal W0 and W1 vectors
     Float w0Dot = dot(plane->w0(), plane->w1());
     // sqrt(1 - (w0Dot*w0Dot)) -> pythagore
-    Vector newW1 = sqrt(1 - (w0Dot * w0Dot)) * orthNewW1 + plane->w0() * w0Dot;
+    Vector newW1 = std::sqrt(Float(1.0 - (w0Dot * w0Dot))) * orthNewW1 + plane->w0() * w0Dot;
 #endif
 
     // Recheck the intersection to be sure that

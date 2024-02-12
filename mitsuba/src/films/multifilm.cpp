@@ -16,9 +16,10 @@
     along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+//#include "multifilm.h"
+
 #include <mitsuba/render/film.h>
 #include <mitsuba/core/fstream.h>
-#include <mitsuba/core/bitmap.h>
 #include <mitsuba/core/statistics.h>
 #include <boost/algorithm/string.hpp>
 #include "banner.h"
@@ -26,8 +27,8 @@
 
 MTS_NAMESPACE_BEGIN
 
-/*!\plugin{hdrfilm}{High dynamic range film}
- * \order{1}
+/*!\plugin{multifilm}{High dynamic range film with multiple outputs}
+ * \order{5}
  * \parameters{
  *     \parameter{width, height}{\Integer}{
  *       Width and height of the camera sensor in pixels
@@ -78,133 +79,28 @@ MTS_NAMESPACE_BEGIN
  *     be used by the film. \default{\code{gaussian}, a windowed Gaussian filter}}
  * }
  *
- * This is the default film plugin that is used when none is explicitly
- * specified. It stores the captured image as a high dynamic range OpenEXR file
- * and tries to preserve the rendering as much as possible by not performing any
- * kind of post processing, such as gamma correction---the output file
- * will record linear radiance values.
- *
- * When writing OpenEXR files, the film will either produce a luminance, luminance/alpha,
- * RGB(A), XYZ(A) tristimulus, or spectrum/spectrum-alpha-based bitmap having a
- * \code{float16}, \code{float32}, or \code{uint32}-based internal representation
- * based on the chosen parameters.
- * The default configuration is RGB with a \code{float16} component format,
- * which is appropriate for most purposes. Note that the spectral output options
- * only make sense when using a custom build of Mitsuba that has spectral
- * rendering enabled (this is not the case for the downloadable release builds).
- * For OpenEXR files, Mitsuba also supports fully general multi-channel output;
- * refer to the \pluginref{multichannel} plugin for details on how this works.
- *
- * The plugin can also write RLE-compressed files in the Radiance RGBE format
- * pioneered by Greg Ward (set \code{fileFormat=rgbe}), as well as the
- * Portable Float Map format (set \code{fileFormat=pfm}).
- * In the former case,
- * the \code{componentFormat} and \code{pixelFormat} parameters are ignored,
- * and the output is ``\code{float8}''-compressed RGB data.
- * PFM output is restricted to \code{float32}-valued images using the
- * \code{rgb} or \code{luminance} pixel formats.
- * Due to the superior accuracy and adoption of OpenEXR, the use of these
- * two alternative formats is discouraged however.
- *
- * When RGB(A) output is selected, the measured spectral power distributions are
- * converted to linear RGB based on the CIE 1931 XYZ color matching curves and
- * the ITU-R Rec. BT.709-3 primaries with a D65 white point.
- *
- * \begin{xml}[caption=Instantiation of a film that writes a full-HD RGBA OpenEXR file without the Mitsuba banner]
- * <film type="hdrfilm">
- *     <string name="pixelFormat" value="rgba"/>
- *     <integer name="width" value="1920"/>
- *     <integer name="height" value="1080"/>
- *     <boolean name="banner" value="false"/>
- * </film>
- * \end{xml}
- *
- * \subsubsection*{Render-time annotations:}
- * \label{sec:film-annotations}
- * The \pluginref{ldrfilm} and \pluginref{hdrfilm} plugins support a
- * feature referred to as \emph{render-time annotations} to facilitate
- * record keeping.
- * Annotations are used to embed useful information inside a rendered image so
- * that this information is later available to anyone viewing the image.
- * Exemplary uses of this feature might be to store the frame or take number,
- * rendering time, memory usage, camera parameters, or other relevant scene
- * information.
- *
- * Currently, two different types are supported: a \code{metadata} annotation
- * creates an entry in the metadata table of the image, which is preferable
- * when the image contents should not be touched. Alternatively, a \code{label}
- * annotation creates a line of text that is overlaid on top of the image. Note
- * that this is only visible when opening the output file (i.e. the line is not
- * shown in the interactive viewer).
- * The syntax of this looks as follows:
- *
- * \begin{xml}
- * <film type="hdrfilm">
- * 	<!-- Create a new metadata entry 'my_tag_name' and set it to the
- * 	     value 'my_tag_value' -->
- * 	<string name="metadata['key_name']" value="Hello!"/>
- *
- * 	<!-- Add the label 'Hello' at the image position X=50, Y=80 -->
- * 	<string name="label[50, 80]" value="Hello!"/>
- * </film>
- * \end{xml}
- *
- * The \code{value="..."} argument may also include certain keywords that will be
- * evaluated and substituted when the rendered image is written to disk. A list all available
- * keywords is provided in Table~\ref{tbl:film-keywords}.
- *
- * Apart from querying the render time,
- * memory usage, and other scene-related information, it is also possible
- * to `paste' an existing parameter that was provided to another plugin---for instance,
- * the camera transform matrix would be obtained as \code{\$sensor['toWorld']}. The name of
- * the active integrator plugin is given by \code{\$integrator['type']}, and so on.
- * All of these can be mixed to build larger fragments, as following example demonstrates.
- * The result of this annotation is shown in Figure~\ref{fig:annotation-example}.
- * \begin{xml}[mathescape=false]
- * <string name="label[10, 10]" value="Integrator: $integrator['type'],
- *   $film['width']x$film['height'], $sampler['sampleCount'] spp,
- *   render time: $scene['renderTime'], memory: $scene['memUsage']"/>
- * \end{xml}
- * \vspace{1cm}
- * \renderings{
- * \fbox{\includegraphics[width=.8\textwidth]{images/annotation_example}}\hfill\,
- * \caption{\label{fig:annotation-example}A demonstration of the label annotation feature
- *  given the example string shown above.}
- * }
- * \vspace{2cm}
- * \begin{table}[htb]
- * \centering
- * \begin{savenotes}
- * \begin{tabular}{ll}
- * \toprule
- * \code{\$scene['renderTime']}& Image render time, use \code{renderTimePrecise} for more digits.\\
- * \code{\$scene['memUsage']}& Mitsuba memory usage\footnote{The definition of this quantity unfortunately
- * varies a bit from platform to platform. On Linux and Windows, it denotes the total
- * amount of allocated RAM and disk-based memory that is private to the process (i.e. not
- * shared or shareable), which most intuitively captures the amount of memory required for
- * rendering. On OSX, it denotes the working set size---roughly speaking, this is the
- * amount of RAM apportioned to the process (i.e. excluding disk-based memory).}.
- * Use \code{memUsagePrecise} for more digits.\\
- * \code{\$scene['coreCount']}& Number of local and remote cores working on the rendering job\\
- * \code{\$scene['blockSize']}& Block size used to parallelize up the rendering workload\\
- * \code{\$scene['sourceFile']}& Source file name\\
- * \code{\$scene['destFile']}& Destination file name\\
- * \code{\$integrator['..']}& Copy a named integrator parameter\\
- * \code{\$sensor['..']}& Copy a named sensor parameter\\
- * \code{\$sampler['..']}& Copy a named sampler parameter\\
- * \code{\$film['..']}& Copy a named film parameter\\
- * \bottomrule
- * \end{tabular}
- * \end{savenotes}
- * \caption{\label{tbl:film-keywords}A list of all special
- * keywords supported by the annotation feature}
- * \end{table}
+ * This film allows to write several HDR output images at once.  Currently it is only used for gradient-domain (bidirectional) path tracing (\pluginref{gpt} and \pluginref{gbdpt}). 
+ * This Film is automatically selected when switching to G-PT or G-BDPT in the GUI. MultiFilm has the exact same parameters as HDRFilm.
  *
  */
 
-class HDRFilm : public Film {
+class MultiFilm : public Film {
 public:
-	HDRFilm(const Properties &props) : Film(props) {
+	/* required by the film interface*/
+	bool develop(const Point2i &offset, const Vector2i &size, const Point2i &targetOffset, Bitmap *target) const override {
+		return developMulti(offset, size, targetOffset, target, 0);
+	}
+	void setBitmap(const Bitmap *bitmap, Float multiplier = 1.0f) override {
+		setBitmapMulti(bitmap, multiplier, 0);
+	}
+	void addBitmap(const Bitmap *bitmap, Float multiplier = 1.0f) override {
+		addBitmapMulti(bitmap, multiplier, 0);
+	}
+	void put(const ImageBlock *bitmap) override {
+		putMulti(bitmap, 0);
+	}
+
+	MultiFilm(const Properties &props) : Film(props) {
 		/* Should an Mitsuba banner be added to the output image? */
 		m_banner = props.getBoolean("banner", false);
 		/* Attach the log file as the EXR comment attribute? */
@@ -348,15 +244,24 @@ public:
 				props.markQueried(keys[i]);
 		}
 
+		//default output settings
+	/*	m_numBuffers = 1;
+		m_storage.resize(m_numBuffers);
 		if (m_pixelFormats.size() == 1) {
-			m_storage = new ImageBlock(Bitmap::ESpectrumAlphaWeight, m_cropSize);
+			m_storage[0] = new ImageBlock(Bitmap::ESpectrumAlphaWeight, m_cropSize);
 		} else {
-			m_storage = new ImageBlock(Bitmap::EMultiSpectrumAlphaWeight, m_cropSize,
+			m_storage[0] = new ImageBlock(Bitmap::EMultiSpectrumAlphaWeight, m_cropSize,
 				NULL, (int) (SPECTRUM_SAMPLES * m_pixelFormats.size() + 2));
-		}
+		}			
+		m_ext_name.resize(m_numBuffers);
+		m_ext_name[0] = new std::string("-out");
+		*/
+		
+		std::vector<std::string> defaultNames = {""};
+		setBuffers(defaultNames);
 	}
 
-	HDRFilm(Stream *stream, InstanceManager *manager)
+	MultiFilm(Stream *stream, InstanceManager *manager)
 		: Film(stream, manager) {
 		m_banner = stream->readBool();
 		m_attachLog = stream->readBool();
@@ -384,49 +289,84 @@ public:
 		stream->writeUInt(m_componentFormat);
 	}
 
-	void clear() {
-		m_storage->clear();
+	bool setBuffers(std::vector<std::string> &names){	
+		m_numBuffers = names.size();
+		m_storage.resize(m_numBuffers);
+		m_ext_name = names;
+		for (size_t i = 0; i < m_numBuffers; ++i){	
+			m_storage[i] = new ImageBlock(Bitmap::ESpectrumAlphaWeight, m_cropSize, NULL, -1, true);
+		//	m_ext_name[i] = new std::string(names.at(i));
+		}
+		
+		clear();
+
+		return true;
 	}
 
-	void put(const ImageBlock *block) {
-		m_storage->put(block);
+
+	void clear() override {
+		for (size_t i = 0; i < m_storage.size(); ++i)
+			m_storage[i]->clear();
 	}
 
-	void setBitmap(const Bitmap *bitmap, Float multiplier) {
-		bitmap->convert(m_storage->getBitmap(), multiplier);
+	void putMulti(const ImageBlock *block, int buf) override {
+		m_storage[buf]->put(block);
 	}
 
-	void addBitmap(const Bitmap *bitmap, Float multiplier) {
+	void setBitmapMulti(const Bitmap *bitmap, Float multiplier, size_t buf) override {
+		bitmap->convert(m_storage[buf]->getBitmap(), multiplier);
+	}
+
+	void addBitmapMulti(const Bitmap *bitmap, Float multiplier, size_t buf) override {
 		/* Currently, only accumulating spectrum-valued floating point images
 		   is supported. This function basically just exists to support the
 		   somewhat peculiar film updates done by BDPT */
 
+		bool hasAlpha = bitmap->getPixelFormat() == Bitmap::ESpectrumAlphaWeight;
+
 		Vector2i size = bitmap->getSize();
-		if (bitmap->getPixelFormat() != Bitmap::ESpectrum ||
+		if ((bitmap->getPixelFormat() != Bitmap::ESpectrum && bitmap->getPixelFormat() != Bitmap::ESpectrumAlphaWeight) ||
 			bitmap->getComponentFormat() != Bitmap::EFloat ||
 			bitmap->getGamma() != 1.0f ||
-			size != m_storage->getSize() ||
+			size != m_storage[buf]->getSize() ||
 			m_pixelFormats.size() != 1) {
 			Log(EError, "addBitmap(): Unsupported bitmap format!");
 		}
 
 		size_t nPixels = (size_t) size.x * (size_t) size.y;
 		const Float *source = bitmap->getFloatData();
-		Float *target = m_storage->getBitmap()->getFloatData();
-		for (size_t i=0; i<nPixels; ++i) {
-			Float weight = target[SPECTRUM_SAMPLES + 1];
-			if (weight == 0)
-				weight = target[SPECTRUM_SAMPLES + 1] = 1;
-			weight *= multiplier;
-			for (size_t j=0; j<SPECTRUM_SAMPLES; ++j)
-				*target++ += *source++ * weight;
-			target += 2;
+		Float *target = m_storage[buf]->getBitmap()->getFloatData();
+
+		if (hasAlpha){
+			for (size_t i = 0; i < nPixels; ++i) {
+				for (size_t j = 0; j < SPECTRUM_SAMPLES; ++j)
+					*target++ += *source++ * multiplier;
+				*target++ += *source++;
+				*target++ += *source++;
+				//target++; 
+				//source++;
+			}
+		}
+		else{
+			for (size_t i = 0; i < nPixels; ++i) {
+				Float weight = target[SPECTRUM_SAMPLES + 1];
+				if (weight == 0)
+					weight = target[SPECTRUM_SAMPLES + 1] = 1;
+				weight *= multiplier;
+				for (size_t j = 0; j < SPECTRUM_SAMPLES; ++j)
+					*target++ += *source++ * weight;
+				target += 2;
+
+			}
 		}
 	}
 
-	bool develop(const Point2i &sourceOffset, const Vector2i &size,
-			const Point2i &targetOffset, Bitmap *target) const {
-		const Bitmap *source = m_storage->getBitmap();
+
+	bool developMulti(const Point2i &sourceOffset, const Vector2i &size,
+			const Point2i &targetOffset, Bitmap *target, size_t buf) const override {
+		if (buf >= m_numBuffers)
+			return false;
+		const Bitmap *source = m_storage[buf]->getBitmap();
 		const FormatConverter *cvt = FormatConverter::getInstance(
 			std::make_pair(Bitmap::EFloat, target->getComponentFormat())
 		);
@@ -454,7 +394,7 @@ public:
 				targetData += target->getWidth() * targetBpp;
 			}
 
-		} else if (size.x == m_cropSize.x && target->getWidth() == m_storage->getWidth()) {
+		} else if (size.x == m_cropSize.x && target->getWidth() == m_storage[0]->getWidth()) {
 			/* Develop a connected part of the underlying buffer */
 			cvt->convert(source->getPixelFormat(), 1.0f, sourceData,
 				target->getPixelFormat(), target->getGamma(), targetData,
@@ -474,69 +414,109 @@ public:
 		return true;
 	}
 
-	void setDestinationFile(const fs::path &destFile, uint32_t blockSize) {
+	void setDestinationFile(const fs::path &destFile, uint32_t blockSize) override {
 		m_destFile = destFile;
 	}
 
-	void develop(const Scene *scene, Float renderTime) {
+
+	void develop(const Scene *scene, Float renderTime) override {
 		if (m_destFile.empty())
 			return;
 
-		Log(EDebug, "Developing film ..");
+		Log(EInfo, "Developing film ..");
 
-		ref<Bitmap> bitmap;
-		if (m_pixelFormats.size() == 1) {
-			bitmap = m_storage->getBitmap()->convert(m_pixelFormats[0], m_componentFormat);
-			bitmap->setChannelNames(m_channelNames);
-		} else {
-			bitmap = m_storage->getBitmap()->convertMultiSpectrumAlphaWeight(m_pixelFormats,
-					m_componentFormat, m_channelNames);
-		}
+		for (size_t buf = 0; buf<m_numBuffers; buf++){
+			ref<Bitmap> bitmap;
+			if (m_pixelFormats.size() == 1) {
+				bitmap = m_storage[buf]->getBitmap()->convert(m_pixelFormats[0], m_componentFormat);
+				bitmap->setChannelNames(m_channelNames);
+			} else {
+				bitmap = m_storage[buf]->getBitmap()->convertMultiSpectrumAlphaWeight(m_pixelFormats,
+						m_componentFormat, m_channelNames);
+			}
 
-		if (m_banner && m_cropSize.x > bannerWidth+5 && m_cropSize.y > bannerHeight + 5 && m_pixelFormats.size() == 1) {
-			int xoffs = m_cropSize.x - bannerWidth - 5,
-			    yoffs = m_cropSize.y - bannerHeight - 5;
-			for (int y=0; y<bannerHeight; y++) {
-				for (int x=0; x<bannerWidth; x++) {
-					if (banner[x+y*bannerWidth])
-						continue;
-					bitmap->setPixel(Point2i(x+xoffs, y+yoffs), Spectrum(1024));
+			if (m_banner && m_cropSize.x > bannerWidth+5 && m_cropSize.y > bannerHeight + 5 && m_pixelFormats.size() == 1) {
+				int xoffs = m_cropSize.x - bannerWidth - 5,
+					yoffs = m_cropSize.y - bannerHeight - 5;
+				for (int y=0; y<bannerHeight; y++) {
+					for (int x=0; x<bannerWidth; x++) {
+						if (banner[x+y*bannerWidth])
+							continue;
+						bitmap->setPixel(Point2i(x+xoffs, y+yoffs), Spectrum(1024));
+					}
 				}
 			}
+		
+
+
+			fs::path filename = m_destFile;
+
+
+			filename.remove_filename(); // Samuli: augment filename by gradient type
+			filename /= std::string(m_destFile.filename().string().c_str()) + m_ext_name.at(buf).c_str();
+
+
+			std::string properExtension;
+			if (m_fileFormat == Bitmap::EOpenEXR)
+				properExtension = ".exr";
+			else if (m_fileFormat == Bitmap::ERGBE)
+				properExtension = ".hdr";
+			else
+				properExtension = ".pfm";
+
+			std::string extension = boost::to_lower_copy(filename.extension().string());
+			if (extension != properExtension)
+				filename.replace_extension(properExtension);
+
+			Log(EInfo, "Writing image to \"%s\" ..", filename.string().c_str());
+			ref<FileStream> stream = new FileStream(filename, FileStream::ETruncWrite);
+
+			if (m_pixelFormats.size() == 1)
+				annotate(scene, m_properties, bitmap, renderTime, 1.0f);
+
+			/* Attach the log file to the image if this is requested */
+			Logger *logger = Thread::getThread()->getLogger();
+			std::string log;
+			if (m_attachLog && logger->readLog(log)) {
+				log += "\n\n";
+				log += Statistics::getInstance()->getStats();
+				bitmap->setMetadataString("log", log);
+			}
+
+			bitmap->write(m_fileFormat, stream);
 		}
 
-		fs::path filename = m_destFile;
-		std::string properExtension;
-		if (m_fileFormat == Bitmap::EOpenEXR)
-			properExtension = ".exr";
-		else if (m_fileFormat == Bitmap::ERGBE)
-			properExtension = ".hdr";
-		else
-			properExtension = ".pfm";
+		// Samuli: output the log file as a separate text file
+		if (0)
+		{
+			std::string log;
+			Logger *logger = Thread::getThread()->getLogger();
+			if (logger->readLog(log))
+			{
+				fs::path filename = m_destFile;
+				filename.remove_filename();
+				filename /= std::string(m_destFile.filename().string().c_str()) + "-log";
+				filename.replace_extension(".txt");
 
-		std::string extension = boost::to_lower_copy(filename.extension().string());
-		if (extension != properExtension)
-			filename.replace_extension(properExtension);
+				Log(EInfo, "Writing log to \"%s\" ..", filename.string().c_str());
+				FILE* f = fopen(filename.string().c_str(), "wt");
+				fprintf(f, "%s", log.c_str());
+				fclose(f);
+			}
 
-		Log(EInfo, "Writing image to \"%s\" ..", filename.string().c_str());
-		ref<FileStream> stream = new FileStream(filename, FileStream::ETruncWrite);
+			fs::path filename = m_destFile;
+			filename.remove_filename();
+			filename /= std::string(m_destFile.filename().string().c_str()) + "-stats";
+			filename.replace_extension(".txt");
 
-		if (m_pixelFormats.size() == 1)
-			annotate(scene, m_properties, bitmap, renderTime, 1.0f);
-
-		/* Attach the log file to the image if this is requested */
-		Logger *logger = Thread::getThread()->getLogger();
-		std::string log;
-		if (m_attachLog && logger->readLog(log)) {
-			log += "\n\n";
-			log += Statistics::getInstance()->getStats();
-			bitmap->setMetadataString("log", log);
+			Log(EInfo, "Writing stats to \"%s\" ..", filename.string().c_str());
+			FILE* f = fopen(filename.string().c_str(), "wt");
+			fprintf(f, "%s", Statistics::getInstance()->getStats().c_str());
+			fclose(f);
 		}
-
-		bitmap->write(m_fileFormat, stream);
 	}
 
-	bool hasAlpha() const {
+	bool hasAlpha() const override {
 		for (size_t i=0; i<m_pixelFormats.size(); ++i) {
 			if (m_pixelFormats[i] == Bitmap::ELuminanceAlpha ||
 				m_pixelFormats[i] == Bitmap::ERGBA ||
@@ -547,7 +527,7 @@ public:
 		return false;
 	}
 
-	bool destinationExists(const fs::path &baseName) const {
+	bool destinationExists(const fs::path &baseName) const override {
 		std::string properExtension;
 		if (m_fileFormat == Bitmap::EOpenEXR)
 			properExtension = ".exr";
@@ -562,9 +542,9 @@ public:
 		return fs::exists(filename);
 	}
 
-	std::string toString() const {
+	std::string toString() const override {
 		std::ostringstream oss;
-		oss << "HDRFilm[" << endl
+		oss << "multiFilm[" << endl
 			<< "  size = " << m_size.toString() << "," << endl
 			<< "  fileFormat = " << m_fileFormat << "," << endl
 			<< "  pixelFormat = ";
@@ -593,9 +573,12 @@ protected:
 	bool m_banner;
 	bool m_attachLog;
 	fs::path m_destFile;
-	ref<ImageBlock> m_storage;
+	ref_vector<ImageBlock> m_storage;
+
+	std::vector<std::string> m_ext_name; //names of the buffers
+	size_t m_numBuffers;
 };
 
-MTS_IMPLEMENT_CLASS_S(HDRFilm, false, Film)
-MTS_EXPORT_PLUGIN(HDRFilm, "High dynamic range film");
+MTS_IMPLEMENT_CLASS_S(MultiFilm, false, Film)
+MTS_EXPORT_PLUGIN(MultiFilm, "High dynamic range film");
 MTS_NAMESPACE_END

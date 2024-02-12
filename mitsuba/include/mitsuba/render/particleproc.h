@@ -81,6 +81,10 @@ public:
 	//! @}
 	// =============================================================
 
+	bool hasMoreWork() const {
+		return m_numGenerated < m_workCount;
+	}
+
 	MTS_DECLARE_CLASS()
 protected:
 
@@ -101,7 +105,7 @@ protected:
 	 */
 	ParticleProcess(EMode mode, size_t workCount,
 		size_t granularity, const std::string &progressText,
-		const void *progressReporterPayload);
+		const void *progressReporterPayload, bool adjointCompensation = true);
 
 	void increaseResultCount(size_t resultCount);
 
@@ -115,6 +119,7 @@ protected:
 	size_t m_granularity;
 	ref<Mutex> m_resultMutex;
 	size_t m_receivedResultCount;
+    bool m_adjointCompensation;
 };
 
 /**
@@ -169,6 +174,9 @@ public:
 	 * about the emission.
 	 */
 	virtual void handleNewParticle();
+  	virtual void handleFinishParticule();
+  	virtual void handleNewPath();
+    virtual void handleCastNewParticule(const RayDifferential& ray, const Medium* medium, const Spectrum& power, const Emitter *emitter);
 
 	/**
      * \brief Handle a surface interaction event
@@ -199,7 +207,15 @@ public:
 		bool delta, const Intersection &its, const Medium *medium,
 		const Spectrum &weight);
 
-    /**
+  	// Similar to handleSurfaceInteraction but after the interaction itself
+  	// It is for beam generation
+	virtual void handledBounce(int depth, int nullInteractions,
+							   bool delta, const Point &p, const Medium *medium,
+							   bool lastNullInteraction,
+							   const Spectrum &weight);
+
+
+  /**
      * \brief Handle a medium interaction event
 	 *
 	 * To be overridden in a subclass. The default implementation
@@ -227,10 +243,29 @@ public:
 		bool delta, const MediumSamplingRecord &mRec, const Medium *medium,
 		const Vector &wi, const Spectrum &weight);
 
+
+    /***** Methods to handle ray differential ******/
+    /**
+     * Initialize the ray differential when the particule is emitted
+     * please note that emissionEvent need to be true
+     * @param ray The ray differential
+     * @param pRec The position sampling record on the light
+     * @param dRec The direction sampling record for the light
+     */
+    virtual void handleSetRayDifferentialFromEmitter(RayDifferential &ray,
+                                                     const PositionSamplingRecord &pRec,
+                                                     const DirectionSamplingRecord &dRec);
+    virtual void handleMediumInteractionScattering(const MediumSamplingRecord &mRec,
+                                                   const PhaseFunctionSamplingRecord &pRec,
+                                                   RayDifferential &ray);
+    virtual void handleSurfaceInteractionScattering(const BSDFSamplingRecord& bRec,
+                                                   RayDifferential &ray);
+    virtual void handleSetRayDifferential(const RayDifferential &ray);
+
 	MTS_DECLARE_CLASS()
 protected:
 	/// Protected constructor
-	ParticleTracer(int maxDepth, int rrDepth, bool emissionEvents);
+	ParticleTracer(int maxDepth, int rrDepth, bool emissionEvents, bool adjointCompensation = true);
 	/// Protected constructor
 	ParticleTracer(Stream *stream, InstanceManager *manager);
 	/// Virtual destructor
@@ -241,6 +276,7 @@ protected:
 	int m_maxDepth;
 	int m_rrDepth;
 	bool m_emissionEvents;
+    bool m_adjointCompensation;
 };
 
 MTS_NAMESPACE_END

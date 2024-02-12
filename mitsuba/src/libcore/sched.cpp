@@ -683,6 +683,7 @@ void LocalWorker::signalProcessCancellation(int id) {
 /* ==================================================================== */
 
 void DummyWorkUnit::set(const WorkUnit *workUnit) { }
+void DummyWorkUnit::clear() { }
 void DummyWorkUnit::load(Stream *stream) { }
 void DummyWorkUnit::save(Stream *stream) const { }
 std::string DummyWorkUnit::toString() const {

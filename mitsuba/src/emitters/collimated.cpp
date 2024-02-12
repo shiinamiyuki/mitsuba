@@ -133,6 +133,10 @@ public:
 		return 0.0f;
 	}
 
+	Float getFlux() const {
+	  return m_power.getLuminance();
+	}
+
 	AABB getAABB() const {
 		return m_worldTransform->getTranslationBounds();
 	}

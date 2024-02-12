@@ -99,8 +99,8 @@ private:
 class GatherPhotonWorker : public ParticleTracer {
 public:
 	GatherPhotonWorker(GatherPhotonProcess::EGatherType type, size_t granularity,
-		int maxDepth, int rrDepth) : ParticleTracer(maxDepth, rrDepth, false),
-		m_type(type), m_granularity(granularity) { }
+		int maxDepth, int rrDepth, int minDepth) : ParticleTracer(maxDepth, rrDepth, false),
+		m_type(type), m_granularity(granularity), m_minDepth(minDepth) { }
 
 	GatherPhotonWorker(Stream *stream, InstanceManager *manager)
 	 : ParticleTracer(stream, manager) {
@@ -110,7 +110,7 @@ public:
 
 	ref<WorkProcessor> clone() const {
 		return new GatherPhotonWorker(m_type, m_granularity, m_maxDepth,
-			m_rrDepth);
+			m_rrDepth, m_minDepth);
 	}
 
 	void serialize(Stream *stream, InstanceManager *manager) const {
@@ -143,18 +143,28 @@ public:
 		if (!(bsdfType & BSDF::EDiffuseReflection) && !(bsdfType & BSDF::EGlossyReflection))
 			return;
 
+		if(depth < m_minDepth) {
+			return;
+		}
+
 		if ((m_type == GatherPhotonProcess::ECausticPhotons && depth > 1 && delta)
 		 || (m_type == GatherPhotonProcess::ESurfacePhotons && depth > 1 && !delta)
 		 || (m_type == GatherPhotonProcess::EAllSurfacePhotons))
 			m_workResult->put(Photon(its.p, its.geoFrame.n, -its.toWorld(its.wi), weight, depth));
 	}
 
-	void handleMediumInteraction(int depth, int nullInteractions, bool delta,
+	void handleMediumInteraction(int depth_, int nullInteractions, bool delta,
 			const MediumSamplingRecord &mRec, const Medium *medium,
 			const Vector &wi, const Spectrum &weight) {
+
+		int depth = depth_ - nullInteractions;
+		if(depth < m_minDepth) {
+			return;
+		}
+
 		if (m_type == GatherPhotonProcess::EVolumePhotons)
 			m_workResult->put(Photon(mRec.p, Normal(0.0f, 0.0f, 0.0f),
-				-wi, weight, depth-nullInteractions));
+				-wi, weight, depth));
 	}
 
 	MTS_DECLARE_CLASS()
@@ -165,14 +175,16 @@ protected:
 	GatherPhotonProcess::EGatherType m_type;
 	size_t m_granularity;
 	ref<PhotonVector> m_workResult;
+  	int m_minDepth;
 };
 
 GatherPhotonProcess::GatherPhotonProcess(EGatherType type, size_t photonCount,
 	size_t granularity, int maxDepth, int rrDepth, bool isLocal, bool autoCancel,
-	const void *progressReporterPayload)
+	const void *progressReporterPayload, bool adjointCompensation, int minDepth)
 	: ParticleProcess(ParticleProcess::EGather, photonCount, granularity, "Gathering photons",
-	  progressReporterPayload), m_type(type), m_photonCount(photonCount), m_maxDepth(maxDepth),
-	  m_rrDepth(rrDepth),  m_isLocal(isLocal), m_autoCancel(autoCancel), m_excess(0), m_numShot(0) {
+	  progressReporterPayload, adjointCompensation), m_type(type), m_photonCount(photonCount), m_maxDepth(maxDepth), m_minDepth(minDepth),
+	  m_rrDepth(rrDepth),  m_isLocal(isLocal), m_autoCancel(autoCancel), m_excess(0), m_numShot(0)
+{
 	m_photonMap = new PhotonMap(photonCount);
 }
 
@@ -181,7 +193,7 @@ bool GatherPhotonProcess::isLocal() const {
 }
 
 ref<WorkProcessor> GatherPhotonProcess::createWorkProcessor() const {
-	return new GatherPhotonWorker(m_type, m_granularity, m_maxDepth, m_rrDepth);
+	return new GatherPhotonWorker(m_type, m_granularity, m_maxDepth, m_rrDepth, m_minDepth);
 }
 
 void GatherPhotonProcess::processResult(const WorkResult *wr, bool cancelled) {
@@ -190,7 +202,7 @@ void GatherPhotonProcess::processResult(const WorkResult *wr, bool cancelled) {
 	const PhotonVector &vec = *static_cast<const PhotonVector *>(wr);
 	LockGuard lock(m_resultMutex);
 
-	size_t nParticles = 0;
+	size_t nParticles = 0;      // Each particle marks a light path (with several photons on it)
 	for (size_t i=0; i<vec.getParticleCount(); ++i) {
 		size_t start = vec.getParticleIndex(i),
 			   end   = vec.getParticleIndex(i+1);

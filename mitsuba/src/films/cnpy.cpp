@@ -110,14 +110,13 @@ void cnpy::parse_zip_footer(FILE* fp, unsigned short& nrecs, unsigned int& globa
 	if(res != 22)
 		throw std::runtime_error("parse_zip_footer: failed fread");
 
-	unsigned short disk_no, disk_start, nrecs_on_disk, comment_len;
-	disk_no = *(unsigned short*) &footer[4];
-	disk_start = *(unsigned short*) &footer[6];
-	nrecs_on_disk = *(unsigned short*) &footer[8];
+	unsigned short disk_no = *(unsigned short*) &footer[4];
+	unsigned short disk_start = *(unsigned short*) &footer[6];
+	unsigned short nrecs_on_disk = *(unsigned short*) &footer[8];
 	nrecs = *(unsigned short*) &footer[10];
 	global_header_size = *(unsigned int*) &footer[12];
 	global_header_offset = *(unsigned int*) &footer[16];
-	comment_len = *(unsigned short*) &footer[20];
+	unsigned short comment_len = *(unsigned short*) &footer[20];
 
 	assert(disk_no == 0);
 	assert(disk_start == 0);

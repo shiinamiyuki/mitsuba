@@ -289,7 +289,7 @@ std::unique_ptr<PixmapF> slicePixmap(const Pixmap3f &src, int channel)
     for (int j = 0; j < w*h; ++j)
         (*result)[j] = src[j][channel];
 
-    return std::move(result);
+    return result;
 }
 
 /** 

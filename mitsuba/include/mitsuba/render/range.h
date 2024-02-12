@@ -40,6 +40,10 @@ public:
 		m_rangeEnd = other->m_rangeEnd;
 	}
 
+	inline void clear() {
+		m_rangeStart = m_rangeEnd + 1;		// Zero size
+	}
+
 	inline void load(Stream *stream) {
 		m_rangeStart = stream->readSize();
 		m_rangeEnd = stream->readSize();

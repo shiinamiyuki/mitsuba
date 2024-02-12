@@ -196,8 +196,8 @@ struct Reconstruction {
 			std::vector<float> rec(len, 0.f);
 			solverL1.exportImagesMTS(&rec[0]);
 			results.push_back(Result {
-					name: "L1",
-					img: options.process(rec, primal, very_direct, imgSize)
+					.name = "L1",
+					.img = options.process(rec, primal, very_direct, imgSize)
 			});
 		}
 		if(reconstructUni) {
@@ -252,8 +252,8 @@ struct Reconstruction {
 				}
 			}
 			results.push_back(Result {
-				name: "Uni",
-				img: options.process(rec[dst], primal, very_direct, imgSize)
+				.name = "Uni",
+				.img = options.process(rec[dst], primal, very_direct, imgSize)
 			});
 		}
 		if(reconstructWeighted) {

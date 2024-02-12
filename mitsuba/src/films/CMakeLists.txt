@@ -15,3 +15,5 @@ if (OPENEXR_FOUND)
   include_directories(${ILMBASE_INCLUDE_DIRS} ${OPENEXR_INCLUDE_DIRS})
   add_film(tiledhdrfilm tiledhdrfilm.cpp)
 endif()
+
+add_film(multifilm multifilm.cpp annotations.h banner.h MTS_HW)

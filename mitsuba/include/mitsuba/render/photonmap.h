@@ -128,6 +128,11 @@ public:
 	 */
 	size_t estimateRadianceRaw(const Intersection &its,
 		Float searchRadius, Spectrum &result, int maxDepth) const;
+  	size_t estimateRadianceGP(const Intersection &its,
+							 Float searchRadius, Spectrum &result, int maxDepth,
+							 int currSComp) const;
+  	size_t estimateVolumeRadiance(const MediumSamplingRecord &mRec, const Vector& viewDir,
+								  Float searchRadius, Spectrum &result, int maxDepth) const;
 
 	/// Perform a nearest-neighbor query, see \ref PointKDTree for details
 	inline size_t nnSearch(const Point &p, Float &sqrSearchRadius,

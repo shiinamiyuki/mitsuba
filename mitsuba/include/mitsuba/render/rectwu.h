@@ -38,6 +38,7 @@ public:
 	void set(const WorkUnit *wu);
 	void load(Stream *stream);
 	void save(Stream *stream) const;
+	void clear() override;
 
 	inline const Point2i &getOffset() const { return m_offset; }
 	inline const Vector2i &getSize() const { return m_size; }

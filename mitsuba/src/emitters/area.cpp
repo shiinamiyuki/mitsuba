@@ -76,12 +76,14 @@ public:
 
 		m_radiance = props.getSpectrum("radiance", Spectrum::getD65());
 		m_power = Spectrum(0.0f); /// Don't know the power yet
+		m_solidAngle = props.getFloat("solidAngle", 4.0*M_PI);
 	}
 
 	AreaLight(Stream *stream, InstanceManager *manager)
 		: Emitter(stream, manager) {
 		m_radiance = Spectrum(stream);
 		m_power = Spectrum(stream);
+		m_solidAngle = stream->readFloat();
 		configure();
 	}
 
@@ -89,7 +91,8 @@ public:
 		Emitter::serialize(stream, manager);
 		m_radiance.serialize(stream);
 		m_power.serialize(stream);
-	}
+		stream->writeFloat(m_solidAngle);
+}
 
 	Spectrum samplePosition(PositionSamplingRecord &pRec,
 			const Point2 &sample, const Point2 *extra) const {
@@ -99,6 +102,10 @@ public:
 
 	Spectrum evalPosition(const PositionSamplingRecord &pRec) const {
 		return m_radiance * M_PI;
+	}
+
+  	Float getFlux() const {
+		return m_radiance.getLuminance() * M_PI * m_shape->getSurfaceArea();
 	}
 
 	Spectrum eval(const Intersection &its, const Vector &d) const {
@@ -225,6 +232,7 @@ public:
 
 	MTS_DECLARE_CLASS()
 protected:
+	Float m_solidAngle;
 	Spectrum m_radiance, m_power;
 };
 

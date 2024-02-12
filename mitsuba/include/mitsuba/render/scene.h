@@ -88,7 +88,7 @@ public:
 	 * before using any of the methods in this class.
 	 */
 	void initializeBidirectional();
-
+	void weightEmitterFlux();
 	/**
 	 * \brief Perform any pre-processing steps before rendering
 	 *
@@ -141,7 +141,7 @@ public:
 		int sceneResID, int sensorResID, int samplerResID);
 
 	/// Write out the current (partially rendered) image
-	void flush(RenderQueue *queue, const RenderJob *job);
+	bool flush(RenderQueue *queue, const RenderJob *job, size_t iteration = 0);
 
 	/**
 	 * \brief Cancel a running rendering job
@@ -514,6 +514,25 @@ public:
 			const Point2 &sample, bool testVisibility = true) const;
 
 	/**
+	 * \brief Like sampleEmitterDirect, but always tests for visibility and
+	          returns also whether the sampled emitter is visible.
+	 */
+	std::pair<Spectrum, bool> sampleEmitterDirectVisible(DirectSamplingRecord &dRec,
+		const Point2 &_sample) const;
+
+ 	 /**
+	 * \brief Like sampleEmitterDirect, but always tests for visibility and
+	          returns also whether the sampled emitter is visible.
+	 */
+  	std::pair<Spectrum, bool> sampleAttenuatedEmitterDirectVisible(DirectSamplingRecord &dRec,
+																   const Medium *medium,
+																   int &interactions,
+																   const Point2 &sample,
+																   Sampler *sampler = NULL,
+																   bool isSurface = true) const;
+
+
+  	/**
 	 * \brief Direct illumination sampling with support for participating
 	 * media (medium variant)
 	 *
@@ -1131,6 +1150,9 @@ public:
 	/// Return a string representation
 	std::string toString() const;
 
+	/// Set flag to allow dumping partial renders
+    void setImageDump(bool value) { m_dumpImages = value; }
+
 	//! @}
 	// =============================================================
 
@@ -1165,6 +1187,7 @@ private:
 	uint32_t m_blockSize;
 	bool m_degenerateSensor;
 	bool m_degenerateEmitters;
+	bool m_dumpImages = true;
 };
 
 MTS_NAMESPACE_END

@@ -64,7 +64,8 @@ public:
 	 */
 	GatherPhotonProcess(EGatherType type, size_t photonCount,
 		size_t granularity, int maxDepth, int rrDepth, bool isLocal,
-		bool autoCancel, const void *progressReporterPayload);
+		bool autoCancel, const void *progressReporterPayload, bool adjointCompensation = true,
+		int minDepth = 0);
 
 	/**
 	 * Once the process has finished, this returns a reference
@@ -117,7 +118,7 @@ protected:
 	EGatherType m_type;
 	ref<PhotonMap> m_photonMap;
 	size_t m_photonCount;
-	int m_maxDepth;
+	int m_maxDepth, m_minDepth;
 	int m_rrDepth;
 	bool m_isLocal;
 	bool m_autoCancel;

@@ -63,6 +63,26 @@ public:
 	/// Develop the film and write the result to the previously specified filename
 	virtual void develop(const Scene *scene, Float renderTime) = 0;
 
+	/*GBDPT-Specific Multi-buffer functions*/
+	virtual void setBitmapMulti(const Bitmap *bitmap, Float multiplier, size_t buf){
+		Log(EWarn, "setBitmapMulti() is only implemented for MultiFilm");
+	}
+	virtual void addBitmapMulti(const Bitmap *bitmap, Float multiplier, size_t buf){
+		Log(EWarn, "addBitmapMulti() is only implemented for MultiFilm");
+	}
+	virtual bool developMulti(const Point2i &offset, const Vector2i &size, const Point2i &targetOffset, Bitmap *target, size_t buf) const{
+		Log(EWarn, "developMulti() is only implemented for MultiFilm");
+		return false;
+	}
+	virtual void putMulti(const ImageBlock *image, int buf){
+		Log(EWarn, "putMulti() is only implemented for MultiFilm");
+	}
+	/// set buffer function for MultiFilm. Usage: Integrator passes list of output buffernames to the Film.
+	virtual bool setBuffers(std::vector<std::string> &names){
+		Log(EWarn, "setBuffers() is only implemented for MultiFilm.");
+		return false;
+	}
+
 	/**
 	 * \brief Develop the contents of a subregion of the film and store
 	 * it inside the given bitmap

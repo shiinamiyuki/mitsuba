@@ -55,6 +55,9 @@ public:
 	/// Serialize a work unit to a binary data stream
 	virtual void save(Stream *stream) const = 0;
 
+	/// Empty the content of this work unit
+	virtual void clear() = 0;
+
 	/// Return a string representation
 	virtual std::string toString() const = 0;
 
@@ -797,7 +800,7 @@ public:
 	void load(Stream *stream);
 	void save(Stream *stream) const;
 	std::string toString() const;
-
+	void clear() override;
 	MTS_DECLARE_CLASS()
 protected:
 	virtual ~DummyWorkUnit() { }

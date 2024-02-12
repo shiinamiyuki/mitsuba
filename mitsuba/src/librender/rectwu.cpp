@@ -30,6 +30,13 @@ void RectangularWorkUnit::set(const WorkUnit *wu) {
 	m_size = rect->m_size;
 }
 
+void RectangularWorkUnit::clear() {
+	SLog(EError, "Unsupported clear function.");
+	// Below should work but it needs to be tested
+	//m_offset = Point2i(0, 0);
+	//m_size = Vector2i(0, 0);
+}
+
 void RectangularWorkUnit::load(Stream *stream) {
 	int data[4];
 	stream->readIntArray(data, 4);
