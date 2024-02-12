@@ -127,7 +127,8 @@ bool CausticPerturbation::sampleMutation(
 	if (!proposal.vertex(l)->perturbDirection(m_scene,
 			proposal.vertex(l-1), proposal.edge(l-1),
 			proposal.edge(l), proposal.vertex(l+1), wo, dist,
-			source.vertex(l+1)->getType(), EImportance)) {
+			source.vertex(l+1)->getType(), EImportance,
+			PathVertex::OptionPerturbDirection{})) {
 		proposal.release(l, m+1, m_pool);
 		return false;
 	}

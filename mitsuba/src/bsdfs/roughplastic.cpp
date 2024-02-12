@@ -529,6 +529,74 @@ public:
 			return std::numeric_limits<Float>::infinity();
 	}
 
+	int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample,  const Float roughtConst) const {
+		if(Frame::cosTheta(bRec.wi) <= 0) {
+			pdf = 0.0;
+			return -1;
+		}
+
+		// Check if the roughness of the phong material need bouncing
+		Float roughtnessPhong = getRoughness(bRec.its, 0);
+		if(roughtnessPhong >= roughtConst) {
+		  pdf = 1.f;
+		  return -1; // All component are selected !
+		}
+
+		MicrofacetDistribution distr(
+			m_type,
+			m_alpha->eval(bRec.its).average(),
+			m_sampleVisible
+		);
+
+		/* Find the probability of sampling the specular component */
+		Float probSpecular = 1 - m_externalRoughTransmittance->eval(Frame::cosTheta(bRec.wi), distr.getAlpha());
+
+		/* Reallocate samples */
+		probSpecular = (probSpecular*m_specularSamplingWeight) /
+					   (probSpecular*m_specularSamplingWeight +
+						(1-probSpecular) * (1-m_specularSamplingWeight));
+
+		if (sample.y < probSpecular) {
+			sample.y /= probSpecular;
+			pdf = probSpecular;
+			return 0;
+		} else {
+			sample.y = (sample.y - probSpecular) / (1 - probSpecular);
+			pdf = 1 - probSpecular;
+			return 1;
+		}
+	}
+
+  	Float pdfComponent(const BSDFSamplingRecord& bRec) const {
+		if(Frame::cosTheta(bRec.wi) <= 0)
+		{
+			return 0.f;
+		}
+
+		if(bRec.component == -1) {
+			return 1.f;
+		}
+		/* Construct the microfacet distribution matching the
+		   roughness values at the current surface position. */
+		MicrofacetDistribution distr(
+			m_type,
+			m_alpha->eval(bRec.its).average(),
+			m_sampleVisible
+		);
+
+		/* Find the probability of sampling the specular component */
+		Float probSpecular = 1 - m_externalRoughTransmittance->eval(Frame::cosTheta(bRec.wi), distr.getAlpha());
+
+		/* Reallocate samples */
+		probSpecular = (probSpecular*m_specularSamplingWeight) /
+					   (probSpecular*m_specularSamplingWeight +
+						(1-probSpecular) * (1-m_specularSamplingWeight));
+
+		if(bRec.component == 0) return probSpecular;
+		else return 1-probSpecular;
+  	}
+
 	std::string toString() const {
 		std::ostringstream oss;
 		oss << "RoughPlastic[" << endl

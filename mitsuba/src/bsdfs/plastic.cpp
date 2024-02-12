@@ -448,6 +448,34 @@ public:
 			return std::numeric_limits<Float>::infinity();
 	}
 
+	int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample,  const Float roughtConst) const {
+	  Float Fi = fresnelDielectricExt(Frame::cosTheta(bRec.wi), m_eta);
+	  Float probSpecular = (Fi*m_specularSamplingWeight) /
+		  (Fi*m_specularSamplingWeight +
+			  (1-Fi) * (1-m_specularSamplingWeight));
+	  if (sample.x < probSpecular) {
+		  pdf = probSpecular;
+		  sample.x /= probSpecular; // scale sample
+		  return 0;
+	  } else {
+		  pdf = (1-probSpecular);
+		  sample.x = (sample.x - probSpecular)/(1-probSpecular); // scale sample
+		  return 1;
+	  }
+	}
+
+	Float pdfComponent(const BSDFSamplingRecord& bRec) const {
+		if(bRec.component == -1) return 1.f;
+
+		Float Fi = fresnelDielectricExt(Frame::cosTheta(bRec.wi), m_eta);
+		Float probSpecular = (Fi*m_specularSamplingWeight) /
+				(Fi*m_specularSamplingWeight +
+						(1-Fi) * (1-m_specularSamplingWeight));
+		if(bRec.component == 0) return  probSpecular;
+		else return 1-probSpecular;
+	}
+
 	std::string toString() const {
 		std::ostringstream oss;
 		oss << "SmoothPlastic[" << endl

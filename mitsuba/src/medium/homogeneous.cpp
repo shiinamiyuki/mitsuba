@@ -165,6 +165,8 @@ public:
 		 *    sigma_t(t) * tau(0 <-> t)
 		 * See the separate writeup for more details.
 		 */
+		// Always try to sample a distance inside the volume
+		// This might be not optimal but for our case, it is.
 		m_mediumSamplingWeight = props.getFloat("mediumSamplingWeight", -1);
 		if (m_mediumSamplingWeight == -1) {
 			for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
@@ -185,6 +187,18 @@ public:
 
 		if (strategy == "balance") {
 			m_strategy = EBalance;
+
+		  	// FIXME: Make not possible to use the algorithm with different scattering coef
+            // This is due to the fact that we need to store in random number used
+            // for the distance sampling to compute the shift values.
+            // This is only a implementation issue and can be solved if we know the random number used
+            // When we generate the camera path (G-
+		  	Float refSample = m_sigmaT[0];
+		  	for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
+			  if(m_sigmaT[i] != refSample) {
+				SLog(EError, "Not possible to have different albedo values...");
+			  }
+			}
 		} else if (strategy == "single") {
 			m_strategy = ESingle;
 
@@ -224,6 +238,10 @@ public:
 		} else {
 			Log(EError, "Specified an unknown sampling strategy");
 		}
+	}
+
+	void computeOnlyVolumeInteraction() {
+		m_mediumSamplingWeight = 1.f; // Put the probability to 1
 	}
 
 	HomogeneousMedium(Stream *stream, InstanceManager *manager)
@@ -273,20 +291,55 @@ public:
 	}
 
 	bool sampleDistance(const Ray &ray, MediumSamplingRecord &mRec,
-			Sampler *sampler) const {
-		Float rand = sampler->next1D(), sampledDistance;
+			Sampler *sampler, EDistanceSampling strategy = EDistanceNormal,
+			const Float randomNumber = -1) const {
+
+		// Generate the random number
+		Float rand = randomNumber;
+		if(strategy != EDistanceLong) {
+		  // TODO: Found a better way to handle this case (Distance long)
+		  if(rand == -1) rand = sampler->next1D();
+        }
+		mRec.randNumber = rand;
+
 		Float samplingDensity = m_samplingDensity;
 
-		if (rand < m_mediumSamplingWeight) {
-			rand /= m_mediumSamplingWeight;
+		if(strategy == EDistanceAlwaysValid && m_strategy != EBalance && m_strategy != ESingle) {
+		  Log(EError, "Always sampling is only available for Balance/Single sampling routine.");
+		}
+		if(strategy == EDistanceAlwaysValid && std::isinf(ray.maxt)) {
+		  Log(EError, "Impossible to use always valid with infinite distance (implementation 'issue')");
+		}
+
+		Float currentMediumSampling = m_mediumSamplingWeight;
+		if(strategy == EDistanceAlwaysValid && m_mediumSamplingWeight != 1.f) {
+		  //Log(EWarn, "Need to use sampling Density = 1");
+		  currentMediumSampling = 1.f;
+		}
+
+		// Sample the distance
+		Float sampledDistance;
+		if (rand < currentMediumSampling) {
+			rand /= currentMediumSampling;
 			if (m_strategy != EMaximum) {
 				/* Choose the sampling density to be used */
 				if (m_strategy == EBalance) {
-					int channel = std::min((int) (sampler->next1D()
+					int channel = std::min((int) (0.5
 						* SPECTRUM_SAMPLES), SPECTRUM_SAMPLES-1);
 					samplingDensity = m_sigmaT[channel];
 				}
-				sampledDistance = -math::fastlog(1-rand) / samplingDensity;
+
+				if(strategy == EDistanceAlwaysValid) {
+				  // Use the max distance to correctly sample the media
+				  const Float maxDist = std::max((ray.maxt - ray.mint) - Epsilon,(Float) 0.0); // Add eps to avoid to fail
+				  const Float normalization = 1-math::fastexp(-samplingDensity*maxDist);
+				  sampledDistance = -math::fastlog(1 - rand*normalization) / samplingDensity;
+				} else if(strategy == EDistanceLong) {
+				  sampledDistance = -math::fastlog(Epsilon);
+                } else {
+				  // Regular way to sample the medium distance
+				  sampledDistance = -math::fastlog(1-rand) / samplingDensity;
+				}
 			} else {
 				sampledDistance = m_maxExpDist->sample(1-rand, mRec.pdfSuccess);
 			}
@@ -310,9 +363,14 @@ public:
 			if (mRec.p == ray.o)
 				success = false;
 		} else {
+			if(strategy == EDistanceAlwaysValid) {
+				Log(EWarn, "Failed to sample the distance but we set the option always valid\n"
+				"sampledDist: %f | disSurf: %f | rand: %f", sampledDistance, distSurf, rand);
+			}
+
 			sampledDistance = distSurf;
 			success = false;
-		}
+    	}
 
 		switch (m_strategy) {
 			case EMaximum:
@@ -322,10 +380,20 @@ public:
 			case EBalance:
 				mRec.pdfFailure = 0;
 				mRec.pdfSuccess = 0;
-				for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
+				if(strategy == EDistanceAlwaysValid) {
+				  const Float maxDist = ray.maxt - ray.mint;
+				  for (int i = 0; i < SPECTRUM_SAMPLES; ++i) {
+					const Float normalization = 1 - math::fastexp(-m_sigmaT[i] * maxDist);
+					Float tmp = math::fastexp(-m_sigmaT[i] * sampledDistance);
+					mRec.pdfFailure = 0;
+					mRec.pdfSuccess += (m_sigmaT[i] / normalization) * tmp;
+				  }
+       			 } else {
+				  for (int i = 0; i < SPECTRUM_SAMPLES; ++i) {
 					Float tmp = math::fastexp(-m_sigmaT[i] * sampledDistance);
 					mRec.pdfFailure += tmp;
 					mRec.pdfSuccess += m_sigmaT[i] * tmp;
+				  }
 				}
 				mRec.pdfFailure /= SPECTRUM_SAMPLES;
 				mRec.pdfSuccess /= SPECTRUM_SAMPLES;
@@ -333,8 +401,18 @@ public:
 
 			case ESingle:
 			case EManual:
-				mRec.pdfFailure = math::fastexp(-samplingDensity * sampledDistance);
-				mRec.pdfSuccess = samplingDensity * mRec.pdfFailure;
+                if(strategy == EDistanceAlwaysValid) {
+                    const Float maxDist = ray.maxt - ray.mint;
+                    const Float normalization = 1 - math::fastexp(-samplingDensity * maxDist);
+                    Float tmp = math::fastexp(-samplingDensity * sampledDistance);
+
+                    mRec.pdfFailure = 0;
+                    mRec.pdfSuccess = (samplingDensity / normalization) * tmp;
+
+                } else {
+                    mRec.pdfFailure = math::fastexp(-samplingDensity * sampledDistance);
+                    mRec.pdfSuccess = samplingDensity * mRec.pdfFailure;
+                }
 				break;
 
 			default:
@@ -342,8 +420,8 @@ public:
 		}
 
 		mRec.transmittance = (m_sigmaT * (-sampledDistance)).exp();
-		mRec.pdfSuccessRev = mRec.pdfSuccess = mRec.pdfSuccess * m_mediumSamplingWeight;
-		mRec.pdfFailure = m_mediumSamplingWeight * mRec.pdfFailure + (1-m_mediumSamplingWeight);
+		mRec.pdfSuccessRev = mRec.pdfSuccess = mRec.pdfSuccess * currentMediumSampling;
+		mRec.pdfFailure = currentMediumSampling * mRec.pdfFailure + (1-currentMediumSampling);
 		mRec.medium = this;
 		if (mRec.transmittance.max() < 1e-20)
 			mRec.transmittance = Spectrum(0.0f);
@@ -351,24 +429,63 @@ public:
 		return success;
 	}
 
-	void eval(const Ray &ray, MediumSamplingRecord &mRec) const {
+	void eval(const Ray &ray, MediumSamplingRecord &mRec, EDistanceSampling strategy = EDistanceNormal) const {
+		if(strategy == EDistanceLong) {
+			Log(EError, "Not implemented");
+		}
+
+		if(strategy == EDistanceAlwaysValid && m_strategy != EBalance && m_strategy != ESingle ) {
+			Log(EError, "Always sampling is only available for Balance/Single sampling routine.");
+		}
+		if(strategy == EDistanceAlwaysValid && std::isinf(ray.maxt)) {
+			Log(EError, "Impossible to use always valid with infinite distance (implementation 'issue')");
+		}
+
+		Float currentMediumSampling = m_mediumSamplingWeight;
+		if(strategy == EDistanceAlwaysValid && m_mediumSamplingWeight != 1.f) {
+			currentMediumSampling = 1.f;
+		}
+
 		Float distance = ray.maxt - ray.mint;
 		switch (m_strategy) {
 			case EManual:
 			case ESingle: {
-					Float temp = math::fastexp(-m_samplingDensity * distance);
-					mRec.pdfSuccess = m_samplingDensity * temp;
-					mRec.pdfFailure = temp;
+                if(strategy == EDistanceAlwaysValid) {
+                    const Float maxDist = ray.maxt - ray.mint;
+                    distance = mRec.t;
+                    SAssert(distance > 0 && std::isfinite(distance));
+
+                    const Float normalization = 1 - math::fastexp(-m_samplingDensity * maxDist);
+                    Float tmp = math::fastexp(-m_samplingDensity * distance);
+                    mRec.pdfFailure = 0;
+                    mRec.pdfSuccess = (m_samplingDensity / normalization) * tmp;
+                } else {
+                    Float temp = math::fastexp(-m_samplingDensity * distance);
+                    mRec.pdfSuccess = m_samplingDensity * temp;
+                    mRec.pdfFailure = temp;
+                }
 				}
 				break;
 
 			case EBalance: {
 					mRec.pdfSuccess = 0;
 					mRec.pdfFailure = 0;
-					for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
-						Float temp = math::fastexp(-m_sigmaT[i] * distance);
-						mRec.pdfSuccess += m_sigmaT[i] * temp;
-						mRec.pdfFailure += temp;
+					if(strategy == EDistanceAlwaysValid) {
+						const Float maxDist = ray.maxt - ray.mint;
+						distance = mRec.t;
+						SAssert(distance > 0 && std::isfinite(distance));
+						for (int i = 0; i < SPECTRUM_SAMPLES; ++i) {
+							const Float normalization = 1 - math::fastexp(-m_sigmaT[i] * maxDist);
+							Float tmp = math::fastexp(-m_sigmaT[i] * distance);
+							mRec.pdfFailure = 0;
+							mRec.pdfSuccess += (m_sigmaT[i] / normalization) * tmp;
+						}
+					} else {
+						for (int i = 0; i < SPECTRUM_SAMPLES; ++i) {
+							Float tmp = math::fastexp(-m_sigmaT[i] * distance);
+							mRec.pdfFailure += tmp;
+							mRec.pdfSuccess += m_sigmaT[i] * tmp;
+						}
 					}
 					mRec.pdfSuccess /= SPECTRUM_SAMPLES;
 					mRec.pdfFailure /= SPECTRUM_SAMPLES;
@@ -385,8 +502,8 @@ public:
 		}
 
 		mRec.transmittance = (m_sigmaT * (-distance)).exp();
-		mRec.pdfSuccess = mRec.pdfSuccessRev = mRec.pdfSuccess * m_mediumSamplingWeight;
-		mRec.pdfFailure = mRec.pdfFailure * m_mediumSamplingWeight + (1-m_mediumSamplingWeight);
+		mRec.pdfSuccess = mRec.pdfSuccessRev = mRec.pdfSuccess * currentMediumSampling;
+		mRec.pdfFailure = mRec.pdfFailure * currentMediumSampling + (1-currentMediumSampling);
 		mRec.sigmaA = m_sigmaA;
 		mRec.sigmaS = m_sigmaS;
 		mRec.time = ray.time;
@@ -396,6 +513,10 @@ public:
 	}
 
 	bool isHomogeneous() const {
+		return true;
+	}
+
+	bool isMedium(const Point& _p) const {
 		return true;
 	}
 

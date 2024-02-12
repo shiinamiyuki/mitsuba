@@ -189,6 +189,20 @@ struct Frame {
 	}
 };
 
+
+/**
+ * This frame use another construction compare to classical frame
+ * this makes the frame more coherent in the 3D domain
+ *
+ */
+struct FrameCoherent: public Frame {
+  inline FrameCoherent(const Vector &_n) : Frame() {
+	  n = _n;
+	  coordinateSystemCoherent(n, s, t);
+  }
+};
+
+
 MTS_NAMESPACE_END
 
 #endif /* __MITSUBA_CORE_FRAME_H_ */

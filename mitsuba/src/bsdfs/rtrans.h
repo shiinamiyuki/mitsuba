@@ -185,15 +185,17 @@ public:
 			  result;
 
 		if (m_alphaFixed && m_etaFixed) {
-		    if (!(cosTheta >= 0))
-		        return 0.f;
+		    if (!(cosTheta >= 0)) {
+				return 0.f;
+			}
 			//SAssert(cosTheta >= 0);
 
 			result = evalCubicInterp1D(warpedCosTheta,
 				m_trans, m_thetaSamples, 0.0f, 1.0f);
 		} else if (m_etaFixed) {
-		    if (!(cosTheta >= 0))
-		        return 0.f;
+		    if (!(cosTheta >= 0)) {
+				return 0.f;
+			}
 			//SAssert(cosTheta >= 0);
 
 			Float warpedAlpha = std::pow((alpha - m_alphaMin)

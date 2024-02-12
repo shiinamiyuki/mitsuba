@@ -26,7 +26,7 @@ static StatsCounter mediumInconsistencies("Bidirectional layer",
 
 bool PathEdge::sampleNext(const Scene *scene, Sampler *sampler,
 		const PathVertex *pred, const Ray &ray, PathVertex *succ,
-		ETransportMode mode) {
+		ETransportMode mode, bool longBeam, bool noReject) {
 	/* First, check if there is a surface in the sampled direction */
 	Intersection &its = succ->getIntersection();
 	bool surface = scene->rayIntersectAll(ray, its);
@@ -34,7 +34,11 @@ bool PathEdge::sampleNext(const Scene *scene, Sampler *sampler,
 	/* Sample the RTE in-scattering integral -- this determines whether the
 	   next vertex is invalid or a surface or medium scattering event */
 	MediumSamplingRecord mRec;
-	if (medium && medium->sampleDistance(Ray(ray, 0, its.t), mRec, sampler)) {
+	/* Two way of sample the medium:
+	 *  - Short beam: Classical way where we can stop in the middle of the medium
+	 *  - Long beam: whatever, the never stop in the middle of the medium
+	 */
+	if (medium && medium->sampleDistance(Ray(ray, 0, its.t), mRec, sampler, longBeam? EDistanceLong : EDistanceNormal)) {
 		succ->type = PathVertex::EMediumInteraction;
 		succ->degenerate = false;
 		succ->getMediumSamplingRecord() = mRec;
@@ -55,10 +59,19 @@ bool PathEdge::sampleNext(const Scene *scene, Sampler *sampler,
 		weight[ERadiance] = weight[EImportance] = Spectrum(1.0f);
 		pdf[ERadiance] = pdf[EImportance] = 1.0f;
 	} else {
-		if (mRec.transmittance.isZero())
-			return false;
-		pdf[mode]   = succ->isMediumInteraction() ? mRec.pdfSuccess    : mRec.pdfFailure;
-		pdf[1-mode] = pred->isMediumInteraction() ? mRec.pdfSuccessRev : mRec.pdfFailure;
+        if(!noReject) {
+            if (mRec.transmittance.isZero())
+                return false;
+        }
+
+		if(longBeam) {
+			// No sampling decision to stop inside the volume
+			// Determinstic decision
+			pdf[mode] = pdf[1-mode] = 1.f;
+		} else {
+			pdf[mode]   = succ->isMediumInteraction() ? mRec.pdfSuccess    : mRec.pdfFailure;
+			pdf[1-mode] = pred->isMediumInteraction() ? mRec.pdfSuccessRev : mRec.pdfFailure;
+		}
 		weight[mode]   = mRec.transmittance / pdf[mode];
 		weight[1-mode] = mRec.transmittance / pdf[1-mode];
 	}
@@ -145,6 +158,45 @@ Spectrum PathEdge::evalTransmittance(const PathVertex *pred, const PathVertex *s
 		Ray(a, d/length, 0, length, pred->getTime()));
 }
 
+Float PathEdge::evalCosine(const PathVertex *vertex) const
+{
+	if (vertex->isOnSurface())
+		return absDot(vertex->getShadingNormal(), d);
+	else
+		return 1.0;
+}
+
+Float PathEdge::evalGeoterm(const PathVertex *pred, const PathVertex *succ) const
+{
+    Float result = 1.0;
+    if (length != 0)
+    {
+        if (pred->isOnSurface())
+            result *= absDot(pred->getShadingNormal(), d);
+        if (succ->isOnSurface())
+        {
+            // result *= absDot(succ->getShadingNormal(), d);
+            result *= absDot(succ->getGeometricNormal(), d);
+        }
+        result /= length * length;
+    }
+    return result;
+}
+
+Float PathEdge::evaldA(const PathVertex *succ) const
+{
+    Float result = 1.0;
+    if (length != 0)
+    {
+        if (succ->isOnSurface())
+        {
+            result *= absDot(succ->getGeometricNormal(), d);
+        }
+        result /= length * length;
+    }
+    return result;
+}
+
 Float PathEdge::evalPdf(const PathVertex *pred,
 		const PathVertex *succ) const {
 	if (succ->isSupernode())
@@ -167,7 +219,7 @@ Float PathEdge::evalPdf(const PathVertex *pred,
 }
 
 Spectrum PathEdge::evalCached(const PathVertex *pred, const PathVertex *succ,
-		unsigned int what) const {
+		unsigned int what, const bool connectable) const {
 	/* Extract the requested information based on what is currently cached in the
 	   vertex. The actual computation that has to happen here is pretty awful, but
 	   it works. It might be worth to change the caching scheme to make this function
@@ -182,7 +234,7 @@ Spectrum PathEdge::evalCached(const PathVertex *pred, const PathVertex *succ,
 	} else {
 		if (what & EValueImp) {
 			Float tmp = pred->pdf[EImportance];
-			if (pred->isConnectable()) {
+			if (pred->isConnectable() || connectable) {
 				tmp *= length * length;
 				if (succ->isOnSurface())
 					tmp /= dot(succ->getGeometricNormal(), d);
@@ -190,13 +242,13 @@ Spectrum PathEdge::evalCached(const PathVertex *pred, const PathVertex *succ,
 					tmp /= dot(pred->getShadingNormal(), d);
 			}
 			result *= pred->weight[EImportance] * std::abs(tmp);
-		} else if ((what & ECosineImp) && pred->isOnSurface() && pred->isConnectable()) {
+		} else if ((what & ECosineImp) && pred->isOnSurface() && (pred->isConnectable() || connectable)) {
 			result *= absDot(pred->getShadingNormal(), d);
 		}
 
 		if (what & EValueRad) {
 			Float tmp = succ->pdf[ERadiance];
-			if (succ->isConnectable()) {
+			if (succ->isConnectable() || connectable) {
 				tmp *= length * length;
 				if (pred->isOnSurface())
 					tmp /= dot(pred->getGeometricNormal(), d);
@@ -204,7 +256,7 @@ Spectrum PathEdge::evalCached(const PathVertex *pred, const PathVertex *succ,
 					tmp /= dot(succ->getShadingNormal(), d);
 			}
 			result *= succ->weight[ERadiance] * std::abs(tmp);
-		} else if ((what & ECosineRad) && succ->isOnSurface() && succ->isConnectable()) {
+		} else if ((what & ECosineRad) && succ->isOnSurface() && (succ->isConnectable() || connectable)) {
 			result *= absDot(succ->getShadingNormal(), d);
 		}
 
@@ -216,6 +268,70 @@ Spectrum PathEdge::evalCached(const PathVertex *pred, const PathVertex *succ,
 	}
 
 	return result;
+}
+
+bool PathEdge::connectIgnoreVisibility(const Scene *scene,
+			const PathEdge *predEdge, const PathVertex *vs,
+			const PathVertex *vt, const PathEdge *succEdge) {
+
+	if (vs->isEmitterSupernode() || vt->isSensorSupernode()) {
+		Float radianceTransport   = vt->isSensorSupernode() ? 1.0f : 0.0f,
+		      importanceTransport = 1-radianceTransport;
+
+		medium = NULL;
+		d = Vector(0.0f);
+		length = 0.0f;
+		pdf[ERadiance]   = radianceTransport;
+		pdf[EImportance] = importanceTransport;
+		weight[ERadiance] = Spectrum(radianceTransport);
+		weight[EImportance] = Spectrum(importanceTransport);
+	} else {
+		Point vsp = vs->getPosition(), vtp = vt->getPosition();
+		d = vsp-vtp;
+		length = d.length();
+		d /= length;
+
+		Ray ray(vtp, d, vt->isOnSurface() ? Epsilon : 0, length *
+			(vs->isOnSurface() ? (1-ShadowEpsilon) : 1), vs->getTime());
+
+		const Medium *vtMedium = vt->getTargetMedium(succEdge, d);
+		const Medium *vsMedium = vs->getTargetMedium(predEdge, -d);
+
+		if (vsMedium != vtMedium) {
+			#if defined(MTS_BD_TRACE)
+				SLog(EWarn, "PathEdge::connect(): attempted two connect "
+					"two vertices that disagree about the medium in between! "
+					"Please check your scene for leaks.");
+			#endif
+			++mediumInconsistencies;
+			return false;
+		}
+
+		medium = vtMedium;
+
+		if (medium) {
+			MediumSamplingRecord mRec;
+			medium->eval(ray, mRec);
+
+			pdf[EImportance] = vt->isMediumInteraction() ? mRec.pdfSuccessRev : mRec.pdfFailure;
+			pdf[ERadiance]   = vs->isMediumInteraction() ? mRec.pdfSuccess    : mRec.pdfFailure;
+
+			/* Fail if there is no throughput */
+			if (mRec.transmittance.isZero() || pdf[EImportance] == 0 || pdf[ERadiance] == 0)
+				return false;
+
+			weight[EImportance] = mRec.transmittance / pdf[EImportance];
+			weight[ERadiance]   = mRec.transmittance / pdf[ERadiance];
+		} else {
+			weight[ERadiance] = weight[EImportance] = Spectrum(1.0f);
+			pdf[ERadiance] = pdf[EImportance] = 1.0f;
+		}
+	}
+
+	/* Direction always points along the light path (from the light source along the path) */
+	d = -d;
+
+	return true;
 }
 
 bool PathEdge::connect(const Scene *scene,
@@ -441,7 +557,7 @@ bool PathEdge::pathConnect(const Scene *scene, const PathEdge *predEdge,
 
 bool PathEdge::pathConnectAndCollapse(const Scene *scene, const PathEdge *predEdge,
 		const PathVertex *vs, const PathVertex *vt,
-		const PathEdge *succEdge, int &interactions) {
+		const PathEdge *succEdge, int &interactions, bool ignore_visibility) {
 	if (vs->isEmitterSupernode() || vt->isSensorSupernode()) {
 		Float radianceTransport   = vt->isSensorSupernode() ? 1.0f : 0.0f,
 		      importanceTransport = 1-radianceTransport;
@@ -481,7 +597,7 @@ bool PathEdge::pathConnectAndCollapse(const Scene *scene, const PathEdge *predEd
 		Float remaining = length;
 		medium = vt->getTargetMedium(succEdge, d);
 
-		while (true) {
+		while (true && !ignore_visibility) {
 			bool surface = scene->rayIntersectAll(ray, its);
 
 			if (surface && (interactions == maxInteractions ||

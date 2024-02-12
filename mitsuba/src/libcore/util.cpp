@@ -599,7 +599,14 @@ void coordinateSystem(const Vector &a, Vector &b, Vector &c) {
 	}
 	b = cross(c, a);
 }
-
+void coordinateSystemCoherent(const Vector &n, Vector &b1, Vector &b2) {
+	// "Building an Orthonormal Basis, Revisited", T. Duff, JCGT 2017
+	float sign = copysignf(1.0f, n.z);
+	const float a = -1.0f / (sign + n.z);
+	const float b = n.x * n.y * a;
+	b1 = Vector(1.0f + sign * n.x * n.x * a, sign * b, -sign * n.x);
+	b2 = Vector(b, sign + n.y * n.y * a, -n.y);
+}
 void computeShadingFrame(const Vector &n, const Vector &dpdu, Frame &frame) {
 	frame.n = n;
 	frame.s = normalize(dpdu - frame.n

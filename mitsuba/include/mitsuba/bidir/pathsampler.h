@@ -49,8 +49,11 @@ public:
 
 	/// Specifies the sampling algorithm that is internally used
 	enum ETechnique {
-		/// Bidirectional path tracing
+		/// Bidirectional path tracing (kelemen one)
 		EBidirectional,
+
+		/// MMLT Bidirectional path tracing
+		EMMLT,
 
 		/// Unidirectional path tracing (via the 'volpath' plugin)
 		EUnidirectional
@@ -61,7 +64,7 @@ public:
 	 *
 	 * \param technique
 	 *     What path generation technique should be used (unidirectional
-	 *     or bidirectional path tracing?)
+	 *     bidirectional or multiplexed path tracing?)
 	 *
 	 * \param scene
 	 *     \ref A pointer to the underlying scene
@@ -118,7 +121,7 @@ public:
 	 * \param list
 	 *    Output parameter that will receive a list of splats
 	 */
-	void sampleSplats(const Point2i &offset, SplatList &list);
+	void sampleSplats(const Point2i &offset, SplatList &list, int depth = -1);
 
 	/**
 	 * \brief Sample a series of paths and invoke the specified callback
@@ -187,7 +190,6 @@ public:
 
 	/// Return the underlying memory pool
 	inline MemoryPool &getMemoryPool() { return m_pool; }
-
 	MTS_DECLARE_CLASS()
 protected:
 	/// Virtual destructor
@@ -223,11 +225,13 @@ struct PathSeed {
 	Float luminance;    ///< Luminance value of the path (for sanity checks)
 	int s;              ///< Number of steps from the luminaire
 	int t;              ///< Number of steps from the eye
+    int depth;          ///< What is the depth for the current seed (for MMLT)
+    int sampler_id = -1;///< Opt: The sampler ID associated to the seed (for multi-thread initialization)
 
 	inline PathSeed() { }
 
 	inline PathSeed(size_t sampleIndex, Float luminance, int s = 0, int t = 0)
-		: sampleIndex(sampleIndex), luminance(luminance), s(s), t(t) { }
+		: sampleIndex(sampleIndex), luminance(luminance), s(s), t(t), depth(-1) { }
 
 	inline PathSeed(Stream *stream) {
 		sampleIndex = stream->readSize();
@@ -264,6 +268,10 @@ public:
 	inline void set(const WorkUnit *wu) {
 		m_seed = static_cast<const SeedWorkUnit *>(wu)->m_seed;
 		m_timeout = static_cast<const SeedWorkUnit *>(wu)->m_timeout;
+	}
+
+	inline void clear() {
+		SLog(EError, "Unsupported clear function.");
 	}
 
 	inline const PathSeed &getSeed() const {
@@ -316,6 +324,8 @@ struct MTS_EXPORT_BIDIR SplatList {
 	Float luminance;
 	/// Total number of samples in the splat list
 	int nSamples;
+	/// Bidirectional strategy used to sample splat (if BDPT was used)
+	int s = -1, t = -1;
 
 	inline SplatList() : luminance(0.0f), nSamples(0) { }
 
@@ -350,6 +360,9 @@ struct MTS_EXPORT_BIDIR SplatList {
 
 	/// Return the spectral contribution associated with a splat in the list
 	inline const Spectrum &getValue(size_t i) const { return splats[i].second; }
+
+	/// Set bidirectional strategy used to sample this splat
+	inline void setStrategy(int emitterDepth, int sensorDepth) { s = emitterDepth, t = sensorDepth; }
 
 	/**
 	 * \brief Normalize the splat list

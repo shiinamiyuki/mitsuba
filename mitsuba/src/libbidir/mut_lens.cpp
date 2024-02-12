@@ -132,7 +132,7 @@ bool LensPerturbation::sampleMutation(
 	if (!proposal.vertex(m)->perturbDirection(m_scene,
 			proposal.vertex(k), proposal.edge(m),
 			proposal.edge(m-1), proposal.vertex(m-1), d, dist,
-			source.vertex(m-1)->getType(), ERadiance)) {
+			source.vertex(m-1)->getType(), ERadiance, PathVertex::OptionPerturbDirection{})) {
 		proposal.release(l, m+1, m_pool);
 		return false;
 	}

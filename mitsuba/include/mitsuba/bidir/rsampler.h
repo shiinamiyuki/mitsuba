@@ -21,6 +21,7 @@
 #define __MITSUBA_BIDIR_RSAMPLER_H_
 
 #include <mitsuba/render/sampler.h>
+#include <mitsuba/core/random.h>
 
 MTS_NAMESPACE_BEGIN
 
@@ -39,6 +40,9 @@ class MTS_EXPORT_BIDIR ReplayableSampler : public Sampler {
 public:
 	/// Construct a new sampler
 	ReplayableSampler();
+
+	/// Construct a new sampler that can have a different seed
+	ReplayableSampler(Random* random);
 
 	/// Unserialize a sampler
 	ReplayableSampler(Stream *stream, InstanceManager *manager);

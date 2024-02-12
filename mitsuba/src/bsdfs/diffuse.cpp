@@ -98,7 +98,7 @@ public:
 		if (m_reflectance->getMaximum().max() > 0)
 			m_components.push_back(EDiffuseReflection | EFrontSide
 				| (m_reflectance->isConstant() ? 0 : ESpatiallyVarying));
-			m_usesRayDifferentials = m_reflectance->usesRayDifferentials();
+		m_usesRayDifferentials = m_reflectance->usesRayDifferentials();
 
 		BSDF::configure();
 	}
@@ -167,6 +167,12 @@ public:
 	Float getRoughness(const Intersection &its, int component) const {
 		return std::numeric_limits<Float>::infinity();
 	}
+
+  int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample, const Float roughtConst) const {
+	  pdf = 1.f;
+	  return -1;
+  }
 
 	std::string toString() const {
 		std::ostringstream oss;

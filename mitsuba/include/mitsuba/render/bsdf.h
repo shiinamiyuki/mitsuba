@@ -458,6 +458,27 @@ public:
 	 */
 	virtual Float getRoughness(const Intersection &its, int index) const;
 
+    // FIXME: Check the definition text
+    /**
+	 * \brief Sample the BSDF component and return the sampled component
+	 * and the probability to sample this component.
+	 *
+	 * Sample need to be reused for bouncing operation.
+	 *
+	 * \param bRec    A BSDF query record
+	 * \param pdf     The pdf of sampled the returned component
+	 * \param sample  A uniformly distributed sample on \f$[0,1]^2\f$
+	 *                it will be scaled after choosing the component (if necessary)
+	 *
+	 * \return The sampled component by taking into account the roughtConstant.
+	 * It's value can be -1 if all the sampleComponent are choosed if the same decision
+	 * (bounce or not) will be done.
+	 *
+	 */
+    virtual int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+                                Point2 &sample, const Float roughtConst) const;
+	virtual Float pdfComponent(const BSDFSamplingRecord& bRec) const;
+
 	/**
 	 * \brief Sometimes, BSDF models make use of a perturbed frame for
 	 * internal shading computations (e.g. bump maps). This function

@@ -119,10 +119,13 @@ public:
 		return Vector(-wi.x, -wi.y, wi.z);
 	}
 
-	Spectrum eval(const BSDFSamplingRecord &bRec, EMeasure measure) const {
+	Spectrum eval(const BSDFSamplingRecord &bRec, EMeasure measure, bool& success) const {
 		if (Frame::cosTheta(bRec.wi) <= 0 ||
 			Frame::cosTheta(bRec.wo) <= 0 || measure != ESolidAngle)
+		{
+			success = false;
 			return Spectrum(0.0f);
+		}
 
 		bool hasSpecular = (bRec.typeMask & EGlossyReflection)
 				&& (bRec.component == -1 || bRec.component == 0);
@@ -143,7 +146,13 @@ public:
 		if (hasDiffuse)
 			result += m_diffuseReflectance->eval(bRec.its) * INV_PI;
 
+		success = true;
 		return result * Frame::cosTheta(bRec.wo);
+	}
+
+	Spectrum eval(const BSDFSamplingRecord &bRec, EMeasure measure) const {
+		bool success;
+		return eval(bRec, measure, success);
 	}
 
 	Float pdf(const BSDFSamplingRecord &bRec, EMeasure measure) const {
@@ -219,24 +228,32 @@ public:
 
 			/* Rotate into the correct coordinate system */
 			bRec.wo = Frame(R).toWorld(localDir);
-			bRec.sampledComponent = 1;
+			bRec.sampledComponent = 0;
 			bRec.sampledType = EGlossyReflection;
 
 			if (Frame::cosTheta(bRec.wo) <= 0)
 				return Spectrum(0.0f);
 		} else {
 			bRec.wo = warp::squareToCosineHemisphere(sample);
-			bRec.sampledComponent = 0;
+			bRec.sampledComponent = 1;
 			bRec.sampledType = EDiffuseReflection;
 		}
 		bRec.eta = 1.0f;
 
 		_pdf = pdf(bRec, ESolidAngle);
 
-		if (_pdf == 0)
+		if (_pdf == 0) {
 			return Spectrum(0.0f);
-		else
-			return eval(bRec, ESolidAngle) / _pdf;
+		} else {
+			bool success;
+			Spectrum result = eval(bRec, ESolidAngle, success);
+			
+			if(result.isZero()) {
+				_pdf = Float(0);
+			}
+
+			return result / _pdf;
+		}
 	}
 
 	Spectrum sample(BSDFSamplingRecord &bRec, const Point2 &sample) const {
@@ -288,6 +305,42 @@ public:
 			<< "]";
 		return oss.str();
 	}
+
+    int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					    Point2 &sample,  const Float roughtConst) const {
+	    // Check if the roughness of the phong material need bouncing
+	    Float roughtnessPhong = getRoughness(bRec.its, 0);
+	    if(roughtnessPhong >= roughtConst) {
+		    pdf = 1.f;
+		    return -1; // All component are selected !
+	    }
+
+	    // Otherwise, select one component only
+	    // based on the "normal" selection probability.
+	    if (sample.x < m_specularSamplingWeight) {
+		    pdf = m_specularSamplingWeight;
+			sample.x /= m_specularSamplingWeight; // scale sample
+		    return 0;
+	    } else {
+		    pdf = (1-m_specularSamplingWeight);
+			sample.x = (sample.x - m_specularSamplingWeight)
+					/ (1-m_specularSamplingWeight); // scale sample
+		    return 1;
+	    }
+    }
+
+    Float pdfComponent(const BSDFSamplingRecord &bRec) const {
+        switch (bRec.component) {
+        case -1: 
+        return 1.0f;
+        case 0: 
+        return m_specularSamplingWeight;
+        case 1: 
+            return 1.0f - m_specularSamplingWeight;
+        default: 
+            return 0;
+        }
+    }
 
 	Shader *createShader(Renderer *renderer) const;
 

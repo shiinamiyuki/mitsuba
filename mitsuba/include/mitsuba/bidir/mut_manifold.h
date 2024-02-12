@@ -24,6 +24,8 @@
 
 MTS_NAMESPACE_BEGIN
 
+#define SPECULAR_ROUGHNESS_THRESHOLD 0.01 // Smaller value = prefer treating materials as non-specular. Larger value = prefer treating them as specular.
+
 #define MTS_MANIFOLD_QUANTILE_SURFACE 0.9f
 #define MTS_MANIFOLD_QUANTILE_MEDIUM  0.5f
 
@@ -35,71 +37,111 @@ MTS_NAMESPACE_BEGIN
  */
 class MTS_EXPORT_BIDIR ManifoldPerturbation : public MutatorBase {
 public:
-	/**
-	 * \brief Construct a new specular manifold perturbation strategy
-	 *
-	 * \param scene
-	 *     A pointer to the underlying scene
-	 *
-	 * \param sampler
-	 *     A sample generator
-	 *
-	 * \param pool
-	 *     A memory pool used to allocate new path vertices and edges
-	 */
-	ManifoldPerturbation(const Scene *scene, Sampler *sampler,
-		MemoryPool &pool,
-		Float probFactor,
-		bool enableOffsetManifolds,
-		bool enableSpecularMedia,
-		Float avgAngleChangeSurface = 0,
-		Float avgAngleChangeMedium = 0);
+    /**
+     * \brief Construct a new specular manifold perturbation strategy
+     *
+     * \param scene
+     *     A pointer to the underlying scene
+     *
+     * \param sampler
+     *     A sample generator
+     *
+     * \param pool
+     *     A memory pool used to allocate new path vertices and edges
+     */
+    ManifoldPerturbation(const Scene *scene, Sampler *sampler,
+                         MemoryPool &pool,
+                         Float probFactor,
+                         bool enableOffsetManifolds,
+                         bool enableSpecularMedia,
+                         Float avgAngleChangeSurface = 0,
+                         Float avgAngleChangeMedium = 0,
+                         Float specularThreshold = 0.001,
+                         int maxManifoldIterations = -1);
 
-	// =============================================================
-	//! @{ \name Implementation of the Mutator interface
+    // =============================================================
+    //! @{ \name Implementation of the Mutator interface
 
-	EMutationType getType() const;
-	Float suitability(const Path &path) const;
-	bool sampleMutation(Path &source, Path &proposal,
-			MutationRecord &muRec, const MutationRecord& sourceMuRec);
-	Float Q(const Path &source, const Path &proposal,
-			const MutationRecord &muRec) const;
-	void accept(const MutationRecord &muRec);
+    EMutationType getType() const;
 
-	//! @}
-	// =============================================================
+    Float suitability(const Path &path) const;
 
-	MTS_DECLARE_CLASS()
+    bool sampleMutation(Path &source, Path &proposal,
+                        MutationRecord &muRec, const MutationRecord &sourceMuRec);
+
+    Float Q(const Path &source, const Path &proposal,
+            const MutationRecord &muRec) const;
+
+    void accept(const MutationRecord &muRec);
+
+    /// Generates the mutation record without actually mutating the path.
+    bool computeMuRec(Path &source, MutationRecord &muRec, bool partialPath = false, bool lightpath = false);
+
+    /// G-BDPT specific offset path generation function. Based on the code taken from the G-MLT team.
+    bool generateOffsetPathGBDPT(Path &source, Path &proposal, MutationRecord &muRec, Vector2 offset,
+                                 bool &couldConnectBehindB, bool lightpath = false, bool merge_only = false);
+
+    /// access to SpecularManifold object for other things as well
+    SpecularManifold *getSpecularManifold(void) { return m_manifold; }
+
+    /// access to specular threshold
+    Float getSpecularThreshold() { return m_specularThreshold; }
+
+    /// Manifold walk to connect two non-specular vertices
+    /* helper functions for G-BDPT*/
+    bool manifoldWalk(const Path &source, Path &proposal, int step, int b, int c,
+                      bool updateAll = false, Float rs = 0.f, Float rp = 0.f);
+    bool manifoldWalkGPM(const Path &source, Path &proposal, int step, size_t b,
+                         size_t c, Float kernelRadius, Point gpBasePos, Point gpOffsetPos);
+
+    int getSpecularChainEndGBDPT(const Path &path, int pos, int step);
+
+    int getSpecularChainEnd(const Path &path, int pos, int step);
+
+    //! @}
+    // =============================================================
+    Sampler *getSampler() {
+        return m_sampler.get();
+    }
+
+    MTS_DECLARE_CLASS()
 protected:
-	/// Virtual destructor
-	virtual ~ManifoldPerturbation();
+    /// Virtual destructor
+    virtual ~ManifoldPerturbation();
 
-	/// Helper function for choosing mutation strategies
-	bool sampleMutationRecord(const Path &source,
-		int &a, int &b, int &c, int &step);
+    /// Helper function for choosing mutation strategies
+    bool sampleMutationRecord(const Path &source,
+                              int &a, int &b, int &c, int &step);
 
-	Float nonspecularProbSurface(Float alpha) const;
-	Float nonspecularProbMedium(Float g) const;
+    Float nonspecularProbSurface(Float alpha) const;
 
-	Float nonspecularProb(const PathVertex *vertex) const;
-	inline Float specularProb(const PathVertex *vertex) const {
-		return 1 - nonspecularProb(vertex);
-	}
+    Float nonspecularProbMedium(Float g) const;
 
-	int getSpecularChainEnd(const Path &path, int pos, int step);
+    Float nonspecularProb(const PathVertex *vertex) const;
+
+    inline Float specularProb(const PathVertex *vertex) const {
+        return 1 - nonspecularProb(vertex);
+    }
+
+    bool propagatePerturbation(Path &source, Path &proposal, int step, int a, int b, ETransportMode mode, bool gvpm);
+
+    bool perturbDirection(Path &source, Path &proposal, int step, int a, Vector2 offset, ETransportMode mode,
+                          bool lightPath = false);
+
 protected:
-	ref<const Scene> m_scene;
-	ref<Sampler> m_sampler;
-	mutable ref<SpecularManifold> m_manifold;
-	MemoryPool &m_pool;
-	Float m_probFactor, m_probFactor2;
-	bool m_enableOffsetManifolds;
-	bool m_enableSpecularMedia;
-	static Float m_thetaDiffSurface;
-	static Float m_thetaDiffMedium;
-	static int m_thetaDiffSurfaceSamples;
-	static int m_thetaDiffMediumSamples;
-	static Mutex *m_thetaDiffMutex;
+    ref<const Scene> m_scene;
+    ref<Sampler> m_sampler;
+    mutable ref<SpecularManifold> m_manifold;
+    MemoryPool &m_pool;
+    Float m_probFactor, m_probFactor2;
+    bool m_enableOffsetManifolds;
+    bool m_enableSpecularMedia;
+    static Float m_thetaDiffSurface;
+    static Float m_thetaDiffMedium;
+    static int m_thetaDiffSurfaceSamples;
+    static int m_thetaDiffMediumSamples;
+    static Mutex *m_thetaDiffMutex;
+    Float m_specularThreshold;
 };
 
 MTS_NAMESPACE_END

@@ -56,6 +56,7 @@ public:
 			bRec.sampledComponent = 0;
 			bRec.sampledType = ENull;
 			bRec.eta = 1.0f;
+
 			return Spectrum(1.0f);
 		} else {
 			return Spectrum(0.0f);
@@ -78,6 +79,16 @@ public:
 	Float getRoughness(const Intersection &its, int component) const {
 		return 0.0f;
 	}
+
+    int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+                          Point2 &sample, const Float roughtConst) const {
+		pdf = 1.0f;
+        return -1;
+    }
+
+    Float pdfComponent(const BSDFSamplingRecord &bRec) const {
+	    return 1.f;
+    }
 
 	std::string toString() const {
 		return "Null[]";

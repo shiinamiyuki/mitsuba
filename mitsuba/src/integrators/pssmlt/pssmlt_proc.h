@@ -35,7 +35,7 @@ class PSSMLTProcess : public ParallelProcess {
 public:
 	PSSMLTProcess(const RenderJob *parent, RenderQueue *queue,
 		const PSSMLTConfiguration &config, const Bitmap *directImage,
-		const std::vector<PathSeed> &seeds);
+		const std::vector<PathSeed> &seeds, ref_vector<ReplayableSampler> rplSamplers);
 
 	void develop();
 
@@ -63,6 +63,7 @@ private:
 	int m_resultCounter, m_workCounter;
 	unsigned int m_refreshTimeout;
 	ref<Timer> m_timeoutTimer, m_refreshTimer;
+    ref_vector<ReplayableSampler> m_rplSamplers;
 };
 
 MTS_NAMESPACE_END

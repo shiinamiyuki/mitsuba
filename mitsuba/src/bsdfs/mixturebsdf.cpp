@@ -141,9 +141,12 @@ public:
 				m_weights[i] *= scale;
 		}
 
-		for (size_t i=0; i<m_bsdfs.size(); ++i)
+		for (size_t i=0; i<m_bsdfs.size(); ++i) {
 			componentCount += m_bsdfs[i]->getComponentCount();
-
+			if(m_bsdfs[i]->getComponentCount() != 1) {
+				Log(EError, "Not possible to support this material");
+			}
+		}
 		m_pdf = DiscreteDistribution(m_bsdfs.size());
 		m_components.reserve(componentCount);
 		m_components.clear();
@@ -247,9 +250,12 @@ public:
 			/* Choose a component based on the normalized weights */
 			size_t entry = m_pdf.sampleReuse(sample.x);
 
-			Spectrum result = m_bsdfs[entry]->sample(bRec, pdf, sample);
-			if (result.isZero()) // sampling failed
+			Float temporaryPdf = (Float)0;
+			Spectrum result = m_bsdfs[entry]->sample(bRec, temporaryPdf, sample);
+			if (temporaryPdf <= 0) // sampling failed
 				return result;
+
+			pdf = temporaryPdf;
 
 			result *= m_weights[entry] * pdf;
 			pdf *= m_pdf[entry];
@@ -290,6 +296,35 @@ public:
 		int bsdfIndex = m_indices[component].first;
 		component = m_indices[component].second;
 		return m_bsdfs[bsdfIndex]->getRoughness(its, component);
+	}
+
+	int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample,  const Float roughtConst) const {
+	  // Assuming that there is only 2 component
+	  if(getComponentCount() != 2) Log(EError, "Mixed doesn't work with more component");
+	  if(getRoughness(bRec.its, 0) >= roughtConst &&
+		 getRoughness(bRec.its, 1) >= roughtConst) {
+		  pdf = 1.f;
+		  return -1; // All component are selected !
+	  }
+
+	  size_t entry = m_pdf.sampleReuse(sample.y);
+	  int component = m_bsdfs[entry]->sampleComponent(bRec, pdf, sample, roughtConst);
+	  if (component == -1) {
+	      return component; // no offset, no multiply
+	  }
+	  component += m_offsets[entry];
+	  pdf *= m_pdf[entry];
+	  return component;
+	}
+
+	Float pdfComponent(const BSDFSamplingRecord& bRec) const {
+	  if(bRec.component == -1) return 1.f;
+	  /* Pick out an individual component */				// bRec.component is the global component index
+	  int idx = m_indices[bRec.component].first;			// the BSDF entry
+	  BSDFSamplingRecord bRec2(bRec);
+	  bRec2.component = m_indices[bRec.component].second;	// the local component index in that entry
+	  return m_pdf[idx] * m_bsdfs[idx]->pdfComponent(bRec2);
 	}
 
 	std::string toString() const {

@@ -30,16 +30,19 @@ MTS_NAMESPACE_BEGIN
  * Sampler implementation as described in
  * 'A Simple and Robust Mutation Strategy for the
  * Metropolis Light Transport Algorithm' by Kelemen et al.
- */
+*/
 class PSSMLTSampler : public Sampler {
 public:
-	// Construct a new MLT sampler
+
+	/* ==================================================================== */
+    /*                           General                                    */
+    /* ==================================================================== */
+
+	/// Construct a new MLT sampler
 	PSSMLTSampler(const PSSMLTConfiguration &conf);
 
-	/**
-	 * \brief Construct a new sampler, which operates on the
-	 * same random number generator as \a sampler.
-	 */
+	/* Construct a new sampler, which operates on the
+	same random number generator as a sampler.*/
 	PSSMLTSampler(PSSMLTSampler *sampler);
 
 	/// Unserialize from a binary data stream
@@ -66,38 +69,11 @@ public:
 	/// Return a string description
 	virtual std::string toString() const;
 
-	/// 1D mutation routine
-	inline Float mutate(Float value) {
-		#if KELEMEN_STYLE_MUTATIONS == 1
-			Float sample = m_random->nextFloat();
-			bool add;
+    /// Set replay mode
+    inline void setReplay(bool value) { m_replay = value; }
 
-			if (sample < 0.5f) {
-				add = true;
-				sample *= 2.0f;
-			} else {
-				add = false;
-				sample = 2.0f * (sample - 0.5f);
-			}
-
-			Float dv = m_s2 * math::fastexp(sample * m_logRatio);
-			if (add) {
-				value += dv;
-				if (value > 1)
-					value -= 1;
-			} else {
-				value -= dv;
-				if (value < 0)
-					value += 1;
-			}
-		#else
-			Float tmp1 = std::sqrt(-2 * std::log(1-m_random->nextFloat()));
-			Float dv = tmp1 * std::cos(2*M_PI*m_random->nextFloat());
-			value = modulo(value + 1e-2f * dv, 1.0f);
-		#endif
-
-		return value;
-	}
+    /// Set maximum dimension of primary sample vector
+    inline void setMaxDim(size_t dim) { m_maxDim = dim; }
 
 	/// Return a primary sample
 	Float primarySample(size_t i);
@@ -127,25 +103,87 @@ public:
 	void setSampleIndex(size_t sampleIndex) { Log(EError, "setSampleIndex(): Unsupported!"); }
 	ref<Sampler> clone();
 
+	/* ==================================================================== */
+    /*                           PSSMLT Specifics                           */
+    /* ==================================================================== */
+
+
+	/// Set whether to use Kelemen mutation or not; if false, use Gaussian
+	inline void setMutationType(bool value) {
+	    m_useKelemen = value;
+	}
+
+	/// 1D mutation routine
+	inline Float mutate(Float value) {
+	    if (m_useKelemen) {
+            Float sample = m_random->nextFloat();
+            bool add;
+
+            if (sample < 0.5f) {
+                add = true;
+                sample *= 2.0f;
+            } else {
+                add = false;
+                sample = 2.0f * (sample - 0.5f);
+            }
+
+            Float dv = m_s2 * math::fastexp(sample * m_logRatio);
+            if (add) {
+                value += dv;
+                if (value > 1)
+                    value -= 1;
+            } else {
+                value -= dv;
+                if (value < 0)
+                    value += 1;
+            }
+        } else {
+            Float tmp1 = std::sqrt(-2 * std::log(1 - m_random->nextFloat()));
+            Float dv = tmp1 * std::cos(2 * M_PI * m_random->nextFloat());
+            value = math::modulo(value + m_sigma * dv, 1.0f);
+        }
+
+		return value;
+	}
+
+
 	MTS_DECLARE_CLASS()
+
 protected:
+
+	/* ==================================================================== */
+    /*                           General                                    */
+    /* ==================================================================== */
+
 	/// Virtual destructor
 	virtual ~PSSMLTSampler();
-protected:
+
+    ref<Random> m_random;               // Random number generator
+    bool m_replay = false;              // replay mode
+    size_t m_maxDim = 80;               // maximum dimension TODO: should not be hardcoded
+    bool m_largeStep;                   // large step probability
+
+	/* ==================================================================== */
+    /*                           PSSMLT Specifics                           */
+    /* ==================================================================== */
+
+	/**
+	 * keep count of last use of a pss dimension
+	*/
 	struct SampleStruct {
 		Float value;
 		size_t modify;
-
 		inline SampleStruct(Float value) : value(value), modify(0) { }
 	};
 
-	ref<Random> m_random;
-	Float m_s1, m_s2, m_logRatio;
-	bool m_largeStep;
-	std::vector<std::pair<size_t, SampleStruct> > m_backup;
-	std::vector<SampleStruct> m_u;
-	size_t m_time, m_largeStepTime;
-	Float m_probLargeStep;
+	bool m_useKelemen;                                      // Use Kelemen of Gaussian
+	Float m_s1, m_s2, m_logRatio;                           // Kelemen mutation related quantities
+	Float m_sigma;                                          // Gaussian mutation std dev
+
+	std::vector<SampleStruct> m_u;	                        // state
+	std::vector<std::pair<size_t, SampleStruct> > m_backup;	// state backup
+	size_t m_time, m_largeStepTime;                         // Kelemen last large step
+
 };
 
 MTS_NAMESPACE_END

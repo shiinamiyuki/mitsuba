@@ -288,6 +288,12 @@ public:
 		return 0.0f;
 	}
 
+  int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample, const Float roughtConst) const {
+	  pdf = 1.f;
+	  return -1;
+  }
+
 	std::string toString() const {
 		std::ostringstream oss;
 		oss << "SmoothConductor[" << endl

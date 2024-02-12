@@ -142,6 +142,18 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	uint16_t componentType;
 
 	/**
+	* \brief Marco: Stores the index of the component of the BRDF that was
+	* sampled. Note that this is different from what componentType stores;
+	* component Type stores the type of interaction while samplesBRDF Index
+	* stores the index of the sampled component of the intersected material.
+	*
+	* For materials with one component only it will be zero.
+    *
+    * Son: use signed integer. -1 means all components selected.
+	*/
+	int16_t sampledComponentIndex;
+
+	/**
 	 * \brief Measurement contribution weight
 	 *
 	 * This field stores the terms of the path-space measurement contribution
@@ -269,11 +281,25 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	 *     interaction.
 	 * \return \c true on success
 	 */
+	struct SamplingOption {
+		bool russianRoulette = false;
+		Float roughness = 0.0;
+		int componentSel = -1;
+		bool longBeam = false;
+		bool adjointComp = true;
+	};
 	bool sampleNext(const Scene *scene, Sampler *sampler,
 		const PathVertex *pred, const PathEdge *predEdge,
 		PathEdge *succEdge, PathVertex *succ,
-		ETransportMode mode, bool russianRoulette = false,
+		ETransportMode mode,
+		SamplingOption option,
 		Spectrum *throughput = NULL);
+	// Remove the computations from bidirectional, a bit faster
+    bool sampleNextUnidirectional(const Scene *scene, Sampler *sampler,
+                                  const PathVertex *pred, const PathEdge *predEdge,
+                                  PathEdge *succEdge, PathVertex *succ,
+                                  ETransportMode mode, bool russianRoulette = false,
+                                  Spectrum *throughput = NULL);
 
 	/**
 	 * \brief \a Direct sampling: given the current vertex as a reference
@@ -309,6 +335,10 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	Spectrum sampleDirect(const Scene *scene, Sampler *sampler,
 		PathVertex *endpoint, PathEdge *edge, PathVertex *sample,
 		ETransportMode mode) const;
+	// This variation return the used random number
+	Spectrum sampleDirect(const Scene *scene, Sampler *sampler,
+						  PathVertex *endpoint, PathEdge *edge, PathVertex *sample,
+						  ETransportMode mode, Point2& rsamp) const;
 
 	/**
 	 * \brief Sample the first vertices on a sensor subpath such that
@@ -346,7 +376,8 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	 *    were successfully filled)
 	 */
 	int sampleSensor(const Scene *scene, Sampler *sampler, const Point2i &pixelPosition,
-		PathEdge *e0, PathVertex *v1, PathEdge *e1, PathVertex *v2);
+		PathEdge *e0, PathVertex *v1, PathEdge *e1, PathVertex *v2, bool longBeam = false,
+		const Point2& realPos = Point2(-1), bool ensurePoint = false);
 
 	/**
 	 * \brief Create a perturbed successor vertex and edge
@@ -385,9 +416,14 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	 *     Specifies whether radiance or importance is being transported
 	 * \return \c true on success
 	 */
+	 struct OptionPerturbDirection {
+	 	bool sampledComponent = false;
+	 	bool adjointComp = true;
+	 };
 	bool perturbDirection(const Scene *scene, const PathVertex *pred,
 		const PathEdge *predEdge, PathEdge *succEdge, PathVertex *succ,
-		const Vector &d, Float dist, EVertexType desiredType, ETransportMode mode);
+		const Vector &d, Float dist, EVertexType desiredType,
+		ETransportMode mode, OptionPerturbDirection option);
 
 	/**
 	 *
@@ -441,7 +477,7 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	bool propagatePerturbation(const Scene *scene, const PathVertex *pred,
 		const PathEdge *predEdge, PathEdge *succEdge, PathVertex *succ,
 		unsigned int componentType, Float dist, EVertexType desiredType,
-		ETransportMode mode);
+		ETransportMode mode, bool adjointComp = true, bool gvpm = false);
 
 	//! @}
 	/* ==================================================================== */
@@ -476,7 +512,7 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	 * \return The contribution weighting factor
 	 */
 	Spectrum eval(const Scene *scene, const PathVertex *pred,
-		const PathVertex *succ, ETransportMode mode, EMeasure measure = EArea) const;
+		const PathVertex *succ, ETransportMode mode, EMeasure measure = EArea, bool adjointComp = true) const;
 
 	/**
 	 * \brief Compute the density of a successor node
@@ -506,6 +542,12 @@ struct MTS_EXPORT_BIDIR PathVertex {
 	 */
 	Float evalPdf(const Scene *scene, const PathVertex *pred,
 		const PathVertex *succ, ETransportMode mode, EMeasure measure = EArea) const;
+        
+        // evaluate the probability of selecting connectable components
+        Float evalSelectionProb(const Scene *scene, const PathVertex *pred, ETransportMode mode, Float th) const;
+        
+        // randomly pick a component usually needed for the last vertex
+        void pickComponent(Sampler* sampler, const PathVertex *pred, ETransportMode mode);
 
 	/**
 	 * \brief Compute the area density of a provided emitter or sensor

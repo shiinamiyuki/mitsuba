@@ -23,6 +23,7 @@
 #define EIGEN_NO_DEBUG
 #include <Eigen/LU>
 #include <Eigen/Geometry>
+#include <sstream>
 
 MTS_NAMESPACE_BEGIN
 
@@ -56,7 +57,7 @@ SpecularManifold::SpecularManifold(const Scene *scene, int maxIterations)
 		MTS_MANIFOLD_MAX_ITERATIONS;
 }
 
-bool SpecularManifold::init(const Path &path, int start, int end) {
+bool SpecularManifold::init(const Path &path, size_t start, size_t end) {
 	int step = start < end ? 1 : -1;
 	if (path.vertex(start)->isSupernode())
 		start += step;
@@ -88,7 +89,7 @@ bool SpecularManifold::init(const Path &path, int start, int end) {
 	m_vertices.clear();
 	m_vertices.push_back(v);
 
-	for (int i=start + step; i != end; i += step) {
+	for (size_t i=start + step; i != end; i += step) {
 		const PathVertex
 			*pred = path.vertex(i-step),
 			*vertex = path.vertex(i),
@@ -396,6 +397,7 @@ bool SpecularManifold::computeTangents() {
 
 	for (int i=n-2; i>=0; --i)
 		m_vertices[i].Tp = -m_vertices[i].u * m_vertices[i+1].Tp;
+
 	return true;
 }
 
@@ -509,7 +511,8 @@ bool SpecularManifold::project(const Vector &d) {
 	return true;
 }
 
-bool SpecularManifold::move(const Point &target, const Normal &n) {
+bool SpecularManifold::move(const Point &target, const Normal &n,
+							Float kernelRadius, const Point& gpPos) {
 	SimpleVertex &last = m_vertices[m_vertices.size()-1];
 
 	#if MTS_MANIFOLD_DEBUG == 1
@@ -547,15 +550,24 @@ bool SpecularManifold::move(const Point &target, const Normal &n) {
 	m_proposal.reserve(m_vertices.size());
 	m_iterations = 0;
 	statsAvgIterations.incrementBase();
-	while (m_iterations < m_maxIterations) {
+
+    Float orgDist = (target - m_vertices[m_vertices.size() - 1].p).length();
+	while (true) {
 		Vector rel = target - m_vertices[m_vertices.size()-1].p;
 		Float dist = rel.length(), newDist;
-		if (dist * invScale < MTS_MANIFOLD_EPSILON) {
+
+		// Compute the max distance between the proposal and GPPos or the target
+		Float max_dist = std::max((gpPos - m_vertices[m_vertices.size()-1].p).lengthSquared(), dist*dist);
+
+        // Always decide success/failure after 1 iteration to save time when kernel radius is specified
+        if ((kernelRadius > 0.f &&  max_dist < (kernelRadius*kernelRadius)) ||
+            (kernelRadius == 0.f && dist * invScale < MTS_MANIFOLD_EPSILON)) {
+            
 			/* Check for an annoying corner-case where the last
-			   two vertices converge to the same point (this can
-			   happen e.g. on rough planar reflectors) */
+			    two vertices converge to the same point (this can
+			    happen e.g. on rough planar reflectors) */
 			dist = (m_vertices[m_vertices.size()-1].p
-			      - m_vertices[m_vertices.size()-2].p).length();
+			        - m_vertices[m_vertices.size()-2].p).length();
 			if (dist * invScale < Epsilon) {
 				return false;
 			}
@@ -570,10 +582,14 @@ bool SpecularManifold::move(const Point &target, const Normal &n) {
 				cout << "move(): converged after " << m_iterations << " iterations" << endl;
 				cout << "Final configuration:" << toString() << endl;
 			#endif
-			return true;
-		}
+			return true;		    
+        }
+        
 		m_iterations++;
 		++statsAvgIterations;
+        
+        // End check
+        if (m_iterations > m_maxIterations) return false;
 
 		/* Compute the tangent vectors for the current path */
 		statsNonManifold.incrementBase();
@@ -619,7 +635,7 @@ bool SpecularManifold::move(const Point &target, const Normal &n) {
 		++statsStepSuccess;
 
 		m_proposal.swap(m_vertices);
-
+        
 		/* Increase the step size */
 		stepSize = std::min((Float) 1.0f, stepSize * 2.0f);
 		continue;
@@ -634,7 +650,8 @@ bool SpecularManifold::move(const Point &target, const Normal &n) {
 	return false;
 }
 
-bool SpecularManifold::update(Path &path, int start, int end) {
+bool SpecularManifold::update(const Path &source, Path &path, size_t start, size_t end,
+		bool adjointCorr, bool gvpm) {
 	int step;
 	ETransportMode mode;
 
@@ -644,11 +661,15 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 		step = -1; mode = ERadiance;
 	}
 
-	int last = (int) m_vertices.size() - 2;
+	int last = (int) m_vertices.size() - 2;     // no update at the end vertex (no succ vertex)
+    if(gvpm) {
+        last = (int) m_vertices.size() - 1;
+    }
+
 	if (m_vertices[0].type == EPinnedDirection)
 		last = std::max(last, 1);
 
-	for (int j=0, i=start; j < last; ++j, i += step) {
+	for (size_t j=0, i=start; j < last; ++j, i += step) {
 		const SimpleVertex
 			&v = m_vertices[j],
 			&vn = m_vertices[j+1];
@@ -665,8 +686,21 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 		Vector d = vn.p - v.p;
 		Float length = d.length();
 		d /= length;
-		PathVertex::EVertexType desiredType = vn.type == EMedium ?
-			PathVertex::EMediumInteraction : PathVertex::ESurfaceInteraction;
+
+		auto desiredType = [&]() -> PathVertex::EVertexType {
+			if (gvpm) {
+				return source.vertex(i + step)->getType();
+			} else {
+				return vn.type == EMedium ? PathVertex::EMediumInteraction : PathVertex::ESurfaceInteraction;
+			}
+		}();
+
+        // Copy BSDF component from source path, which can be used (and overwritten) to during proposal path propagation
+		if (gvpm) {
+			vertex->rrWeight = source.vertex(i)->rrWeight;
+			vertex->sampledComponentIndex = source.vertex(i)->sampledComponentIndex;
+			vertex->componentType = source.vertex(i)->componentType;
+		}
 
 		if (v.type == EPinnedDirection) {
 			/* Create a fake vertex and use it to call sampleDirect(). This is
@@ -690,7 +724,8 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 			if (m_vertices.size() >= 3) {
 				PathVertex *succ2 = path.vertex(i+2*step);
 				PathEdge *succ2Edge = path.edge(predEdgeIdx + 2*step);
-				if (!succ->sampleNext(m_scene, NULL, vertex, succEdge, succ2Edge, succ2, mode)) {
+				SAssert(false); // This part of the code is not maintained.
+				if (!succ->sampleNext(m_scene, NULL, vertex, succEdge, succ2Edge, succ2, mode, PathVertex::SamplingOption {})) {
 					#if MTS_MANIFOLD_DEBUG == 1
 						cout << "update(): failed in sampleNext() / pinned direction!" << endl;
 					#endif
@@ -700,9 +735,12 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 			}
 			i += step;
 		} else if (!v.degenerate) {
+			PathVertex::OptionPerturbDirection option;
+			option.adjointComp = true;
+			option.sampledComponent = gvpm;
 			if (!vertex->perturbDirection(m_scene,
 					pred, predEdge, succEdge, succ, d,
-					length, desiredType, mode)) {
+					length, desiredType, mode, option)) {
 				#if MTS_MANIFOLD_DEBUG == 1
 					cout << "update(): failed in perturbDirection()" << endl;
 				#endif
@@ -714,6 +752,7 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 				std::max(std::max(std::abs(vn.p.x),
 					std::abs(vn.p.y)), std::abs(vn.p.z));
 
+			// FIXME: Maybe this is the current error that we have? (Update)
 			if (relerr > 1e-3f) {
 				// be extra-cautious
 				#if MTS_MANIFOLD_DEBUG == 1
@@ -723,15 +762,20 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 				return false;
 			}
 		} else {
-			unsigned int compType;
-			if (v.type == ERefraction)
-				compType = v.eta != 1 ? BSDF::EDeltaTransmission : (BSDF::ENull | BSDF::EDeltaTransmission);
-			else
-				compType = BSDF::EDeltaReflection;
+			auto compType = [&]() -> unsigned int {
+				if(gvpm) {
+					return  vertex->componentType;
+				} else {
+					if (v.type == ERefraction)
+						return v.eta != 1 ? BSDF::EDeltaTransmission : (BSDF::ENull | BSDF::EDeltaTransmission);
+					else
+						return BSDF::EDeltaReflection;
+				}
+			}();
 
 			if (!vertex->propagatePerturbation(m_scene,
 					pred, predEdge, succEdge, succ, compType,
-					length, desiredType, mode)) {
+					length, desiredType, mode, adjointCorr, gvpm)) {
 				#if MTS_MANIFOLD_DEBUG == 1
 					cout << "update(): failed in propagatePerturbation()" << endl;
 				#endif
@@ -739,6 +783,7 @@ bool SpecularManifold::update(Path &path, int start, int end) {
 				return false;
 			}
 
+			// FIXME: Maybe this is the current error that we have? (Update)
 			Float relerr = (vn.p - succ->getPosition()).length() /
 				std::max(std::max(std::abs(vn.p.x),
 					std::abs(vn.p.y)), std::abs(vn.p.z));
@@ -786,7 +831,7 @@ Float SpecularManifold::det(const Path &path, int a, int b, int c) {
 	} else {
 		vb.n = pb->getShadingNormal();
 	}
-	coordinateSystem(vb.n, vb.dpdu, vb.dpdv);
+	coordinateSystemCoherent(vb.n, vb.dpdu, vb.dpdv);
 
 	if (!computeTangents()) {
 		Log(EWarn, "Could not compute tangents!");
@@ -868,7 +913,154 @@ Float SpecularManifold::det(const Path &path, int a, int b, int c) {
 	}
 }
 
-Float SpecularManifold::multiG(const Path &path, int a, int b) {
+static void printMatrix(Eigen::Matrix<Float, Eigen::Dynamic, Eigen::Dynamic> A) {
+    std::ostringstream oss;
+    oss << "\n";
+    for (int i = 0; i < A.rows(); ++i) {
+        for (int j = 0; j < A.cols(); ++j) {
+            oss << A(i, j) << " ";
+        }
+        oss << "\n";
+    }
+    SLog(EWarn, "%s", oss.str().c_str());
+}
+
+/**
+ * This is the Jacobian in manifold space. 
+ * It computes the determinant of | dxi / dOk |
+ * from vertex b+1 to c in the specular chain b to c (b < c). 
+ */
+Float SpecularManifold::det(const Path &path, int b, int c) {
+    bool success = init(path, b, c);
+    BDAssert(success);
+
+    SimpleVertex &vb = m_vertices[0];
+    const PathVertex *pb = path.vertex(b);
+    
+    if (pb->isMediumInteraction()) {
+        vb.n = normalize(m_vertices[1].p - vb.p);//Vector(path.edge(b < c ? b : b - 1)->d);
+    }
+    else {
+        vb.n = pb->getShadingNormal();
+    }
+    coordinateSystemCoherent(vb.n, vb.dpdu, vb.dpdv);
+
+    SimpleVertex &vc = m_vertices[(int)m_vertices.size() - 1];
+    const PathVertex *pc = path.vertex(c);
+
+    if (pc->isMediumInteraction()) {
+        //vc.n = normalize(m_vertices[(int)m_vertices.size() - 2].p - vc.p);//Vector(path.edge(b < c ? (c - 1) : c)->d);
+        vc.n = normalize(vc.p - m_vertices[(int)m_vertices.size() - 2].p);  // flow from light source
+    }
+    else {
+        vc.n = pc->getShadingNormal();
+    }
+    coordinateSystemCoherent(vc.n, vc.dpdu, vc.dpdv);
+
+    if (!computeTangents()) {
+        Log(EWarn, "Could not compute tangents!");
+        return 0.0f;
+    }
+
+    // First vertex is pinned 
+    m_vertices[0].a.setZero();
+	m_vertices[0].b.setIdentity();
+	m_vertices[0].c.setZero();
+
+    int n = c - b;   // Take care of vertex b + 1 to c
+
+    int nSpecular = 0;
+    int nGlossy = 0;
+    for (int j = 0; j < n-1; ++j) {
+        if (m_vertices[j+1].degenerate) 
+            nSpecular++;
+        else 
+            nGlossy++;
+    }
+
+    // For pure specular, the Jacobian is simply
+    if (nSpecular == n - 1) return std::abs(m_vertices[1].Tp.det());
+
+	Eigen::Matrix<Float, Eigen::Dynamic, Eigen::Dynamic> A(2*n, 2*n);
+	A.setZero();
+    // Fill (n-1) x n matrix
+    for (int j = 0; j < n - 1; ++j) {
+
+        int i = j;
+
+		if (j-1 >= 0) {
+            // dOk / dx_{k-1}
+			A(2*i,   2*(j-1))   = m_vertices[j+1].a(0,0);
+			A(2*i,   2*(j-1)+1) = m_vertices[j+1].a(0,1);
+			A(2*i+1, 2*(j-1))   = m_vertices[j+1].a(1,0);
+			A(2*i+1, 2*(j-1)+1) = m_vertices[j+1].a(1,1);
+		}
+
+        // dOk / dxk
+		A(2*i,   2*j)   = m_vertices[j+1].b(0,0);
+		A(2*i,   2*j+1) = m_vertices[j+1].b(0,1);
+		A(2*i+1, 2*j)   = m_vertices[j+1].b(1,0);
+		A(2*i+1, 2*j+1) = m_vertices[j+1].b(1,1);
+
+		if (j+1 <= n) {
+            // dOk / dx_{k+1}
+			A(2*i,   2*(j+1))   = m_vertices[j+1].c(0,0);
+			A(2*i,   2*(j+1)+1) = m_vertices[j+1].c(0,1);
+			A(2*i+1, 2*(j+1))   = m_vertices[j+1].c(1,0);
+			A(2*i+1, 2*(j+1)+1) = m_vertices[j+1].c(1,1);
+		}
+	}
+
+    // Fill the last row
+    {
+        int i = n - 1;
+        for (int j = 0; j < n-1; ++j) {
+            // dx_s / dx_{j+1} = Tp^-1
+            Matrix2x2 U(Vector2(0.0),Vector2(0.0)); 
+            m_vertices[j + 1].Tp.invert(U);
+            A(2 * i, 2 * j) = U(0, 0);
+            A(2 * i, 2 * j + 1) = U(0, 1);
+            A(2 * i + 1, 2 * j) = U(1, 0);
+            A(2 * i + 1, 2 * j + 1) = U(1, 1);
+        }
+        // Last block is identity
+        int j = n - 1;
+        A(2 * i, 2 * j) = 1.0f;
+        A(2 * i, 2 * j + 1) = 0.0f;
+        A(2 * i + 1, 2 * j) = 0.0f;
+        A(2 * i + 1, 2 * j + 1) = 1.0f;
+    }
+    
+    if (nGlossy == n - 1) {
+        Float det = std::abs(A.determinant());
+        //if (det == 0.0f) {
+        //    printMatrix(A);
+        //}
+        return 1.0f / det;
+    }
+
+    /* Compute the inverse and "cross out" irrelevant columns and rows */
+	Eigen::Matrix<Float, Eigen::Dynamic, Eigen::Dynamic> Ai = A.inverse();
+
+	for (int i=0; i<n-1; ++i) {
+		if (!m_vertices[i+1].degenerate)
+			continue;
+
+        // Column: half-vector of a specular vertex (i) is not relevant
+		Ai.col(2*i).setZero();
+		Ai.col(2*i+1).setZero();
+
+        // Row: the position of the following vertex (i+1) is not relevant. 
+        // Note that it is vertex (i+1) that has not be removed from the integral, not (i).
+        Ai.row(2*(i+1)).setZero();
+        Ai.row(2*(i+1)+1).setZero();
+        Ai.block<2,2>(2*(i+1), 2*i).setIdentity();
+	}
+
+	return std::abs(Ai.determinant());
+}
+
+Float SpecularManifold::multiG(const Path &path, size_t a, size_t b) {
 	if (a == 0)
 		++a;
 	else if (a == path.length())
@@ -886,8 +1078,9 @@ Float SpecularManifold::multiG(const Path &path, int a, int b) {
 
 	Float result = 1;
 
+    // Loop through each specular chain
 	BDAssert(path.vertex(a)->isConnectable() && path.vertex(b)->isConnectable());
-	for (int i = a + step, start = a; i != b + step; i += step) {
+	for (size_t i = a + step, start = a; i != b + step; i += step) {
 		if (path.vertex(i)->isConnectable()) {
 			result *= G(path, start, i);
 			start = i;
@@ -897,16 +1090,24 @@ Float SpecularManifold::multiG(const Path &path, int a, int b) {
 	return result;
 }
 
-Float SpecularManifold::G(const Path &path, int a, int b) {
-	if (std::abs(a-b) == 1) {
+Float SpecularManifold::G(const Path &path, size_t a, size_t b) {
+	if (std::abs(int(a)-int(b)) == 1) {
 		if (a > b)
 			std::swap(a, b);
 		return path.edge(a)->evalCached(path.vertex(a),
 			path.vertex(b), PathEdge::EGeometricTerm)[0];
 	}
 
-	Assert(path.vertex(a)->isConnectable());
-	Assert(path.vertex(b)->isConnectable());
+//	if(!path.vertex(a)->isConnectable()) {
+//		const BSDF* bsdf = path.vertex(a)->getIntersection().getBSDF();
+//		SLog(EError, "ERRROR");
+//	}
+//	if(!path.vertex(b)->isConnectable()) {
+//		const BSDF* bsdf = path.vertex(b)->getIntersection().getBSDF();
+//		SLog(EError, "ERSEFSE");
+//	}
+//	Assert(path.vertex(a)->isConnectable());
+//	Assert(path.vertex(b)->isConnectable());
 	int step = b > a ? 1 : -1;
 
 	bool success = init(path, a, b);
@@ -919,7 +1120,7 @@ Float SpecularManifold::G(const Path &path, int a, int b) {
 	} else {
 		last.n = vb->getShadingNormal();
 	}
-	coordinateSystem(last.n, last.dpdu, last.dpdv);
+	coordinateSystemCoherent(last.n, last.dpdu, last.dpdv);
 
 	statsNonManifold.incrementBase();
 	if (!computeTangents()) {
@@ -995,6 +1196,129 @@ std::string SpecularManifold::toString() const {
 
 	return oss.str();
 }
+
+bool SpecularManifold::updateAll(Path &path, int start, int end) {
+	int step;
+	ETransportMode mode;
+
+	if (start < end) {
+		step = 1; mode = EImportance;
+	} else {
+		step = -1; mode = ERadiance;
+	}
+
+	int last = (int) m_vertices.size() - 2;
+	if (m_vertices[0].type == EPinnedDirection)
+		last = std::max(last, 1);
+
+	for (int j=0, i=start; j <= last; ++j, i += step) {
+		const SimpleVertex
+				&v = m_vertices[j],
+				&vn = m_vertices[j+1];
+
+		PathVertex
+				*pred   = path.vertexOrNull(i-step),
+				*vertex = path.vertex(i),
+				*succ   = path.vertex(i+step);
+
+		int predEdgeIdx = (mode == EImportance) ? i-step : i-step-1;
+		PathEdge *predEdge = path.edgeOrNull(predEdgeIdx),
+				*succEdge = path.edge(predEdgeIdx + step);
+
+		Vector d = vn.p - v.p;
+		Float length = d.length();
+		d /= length;
+		PathVertex::EVertexType desiredType = vn.type == EMedium ?
+											  PathVertex::EMediumInteraction : PathVertex::ESurfaceInteraction;
+
+		if (v.type == EPinnedDirection) {
+			/* Create a fake vertex and use it to call sampleDirect(). This is
+			   kind of terrible -- a nicer API is needed to cleanly support this */
+			PathVertex temp;
+			temp.type = PathVertex::EMediumInteraction;
+			temp.degenerate = false;
+			temp.measure = EArea;
+			MediumSamplingRecord &mRec = temp.getMediumSamplingRecord();
+			mRec.time = m_time;
+			mRec.p = vn.p;
+
+			if (temp.sampleDirect(m_scene, NULL, vertex, succEdge, succ, mode).isZero()) {
+#if MTS_MANIFOLD_DEBUG == 1
+				cout << "update(): failed in sampleDirect()!" << endl;
+#endif
+				++statsUpdateFailed;
+				return false;
+			}
+
+			if (m_vertices.size() >= 3) {
+				PathVertex *succ2 = path.vertex(i+2*step);
+				PathEdge *succ2Edge = path.edge(predEdgeIdx + 2*step);
+				if (!succ->sampleNext(m_scene, NULL, vertex, succEdge, succ2Edge, succ2, mode, PathVertex::SamplingOption{})) {
+#if MTS_MANIFOLD_DEBUG == 1
+					cout << "update(): failed in sampleNext() / pinned direction!" << endl;
+#endif
+					++statsUpdateFailed;
+					return false;
+				}
+			}
+			i += step;
+		} else if (!v.degenerate) {
+			if (!vertex->perturbDirection(m_scene,
+										  pred, predEdge, succEdge, succ, d,
+										  length, desiredType, mode, PathVertex::OptionPerturbDirection{})) {
+#if MTS_MANIFOLD_DEBUG == 1
+				cout << "update(): failed in perturbDirection()" << endl;
+#endif
+				++statsUpdateFailed;
+				return false;
+			}
+
+			Float relerr = (vn.p - succ->getPosition()).length() /
+					std::max(std::max(std::abs(vn.p.x),
+									  std::abs(vn.p.y)), std::abs(vn.p.z));
+
+			if (relerr > 1e-3f) {
+				// be extra-cautious
+#if MTS_MANIFOLD_DEBUG == 1
+				cout << "update(): failed, relative error of perturbDirection() too high:" << relerr << endl;
+#endif
+				++statsUpdateFailed;
+				return false;
+			}
+		} else {
+			unsigned int compType;
+			if (v.type == ERefraction)
+				compType = v.eta != 1 ? BSDF::EDeltaTransmission : (BSDF::ENull | BSDF::EDeltaTransmission);
+			else
+				compType = BSDF::EDeltaReflection;
+
+			if (!vertex->propagatePerturbation(m_scene,
+											   pred, predEdge, succEdge, succ, compType,
+											   length, desiredType, mode)) {
+#if MTS_MANIFOLD_DEBUG == 1
+				cout << "update(): failed in propagatePerturbation()" << endl;
+#endif
+				++statsUpdateFailed;
+				return false;
+			}
+
+			Float relerr = (vn.p - succ->getPosition()).length() /
+					std::max(std::max(std::abs(vn.p.x),
+									  std::abs(vn.p.y)), std::abs(vn.p.z));
+			if (relerr > 1e-3f) {
+				// be extra-cautious
+#if MTS_MANIFOLD_DEBUG == 1
+				cout << "update(): failed, relative error of propagatePerturbation() too high:" << relerr << endl;
+#endif
+				++statsUpdateFailed;
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 
 MTS_IMPLEMENT_CLASS(SpecularManifold, false, Object)
 MTS_NAMESPACE_END

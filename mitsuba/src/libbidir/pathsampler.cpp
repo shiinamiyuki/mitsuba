@@ -25,8 +25,8 @@
 
 MTS_NAMESPACE_BEGIN
 
-PathSampler::PathSampler(ETechnique technique, const Scene *scene, Sampler *sensorSampler,
-		Sampler *emitterSampler, Sampler *directSampler, int maxDepth, int rrDepth,
+PathSampler::PathSampler(ETechnique technique, const Scene *scene, Sampler *emitterSampler,
+		Sampler *sensorSampler, Sampler *directSampler, int maxDepth, int rrDepth,
 		bool excludeDirectIllum,  bool sampleDirect, bool lightImage)
 	: m_technique(technique), m_scene(scene), m_emitterSampler(emitterSampler),
 	  m_sensorSampler(sensorSampler), m_directSampler(directSampler), m_maxDepth(maxDepth),
@@ -35,23 +35,40 @@ PathSampler::PathSampler(ETechnique technique, const Scene *scene, Sampler *sens
 
 	if (technique == EUnidirectional) {
 		/* Instantiate a volumetric path tracer */
-		Properties props("volpath");
-		props.setInteger("maxDepth", maxDepth);
-		props.setInteger("rrDepth", rrDepth);
-		m_integrator = static_cast<SamplingIntegrator *> (PluginManager::getInstance()->
-			createObject(MTS_CLASS(SamplingIntegrator), props));
+		if(scene->hasMedia()) {
+            Properties props("volpath");
+            props.setInteger("maxDepth", maxDepth);
+            props.setInteger("rrDepth", rrDepth);
+            m_integrator = static_cast<SamplingIntegrator *> (PluginManager::getInstance()->
+                    createObject(MTS_CLASS(SamplingIntegrator), props));
+        } else {
+            Properties props("path");
+            props.setInteger("maxDepth", maxDepth);
+            props.setInteger("rrDepth", rrDepth);
+            m_integrator = static_cast<SamplingIntegrator *> (PluginManager::getInstance()->
+                    createObject(MTS_CLASS(SamplingIntegrator), props));
+		}
 	}
 
 	/* Determine the necessary random walk depths based on properties of the endpoints */
 	m_emitterDepth = m_sensorDepth = maxDepth;
 
 	/* Go one extra step if the sensor can be intersected */
-	if (!m_scene->hasDegenerateSensor() && m_emitterDepth != -1)
-		++m_emitterDepth;
+	if (!m_scene->hasDegenerateSensor() && m_emitterDepth != -1) {
+        if(m_technique == EMMLT) {
+            SLog(EError, "Impossible to handle non degenerate sensor this with MMLT");
+        }
+	    ++m_emitterDepth;
+    } else {}
 
 	/* Go one extra step if there are emitters that can be intersected */
-	if (!m_scene->hasDegenerateEmitters() && m_sensorDepth != -1)
-		++m_sensorDepth;
+	if (!m_scene->hasDegenerateEmitters() && m_sensorDepth != -1) {
+        ++m_sensorDepth;
+    } else {
+        if(m_technique == EMMLT) {
+            SLog(EError, "Impossible to handle degenerate light source this with MMLT");
+        }
+	}
 }
 
 PathSampler::~PathSampler() {
@@ -59,11 +76,248 @@ PathSampler::~PathSampler() {
 		Log(EWarn, "Warning: memory pool still contains used objects!");
 }
 
-void PathSampler::sampleSplats(const Point2i &offset, SplatList &list) {
+void PathSampler::sampleSplats(const Point2i &offset, SplatList &list, int depth) {
 	const Sensor *sensor = m_scene->getSensor();
 
 	list.clear();
 	switch (m_technique) {
+	    case EMMLT: {
+	        const bool VERBOSE = false;
+
+            /* Uniformly sample a scene time */
+            Float time = sensor->getShutterOpen();
+            if (sensor->needsTimeSample())
+                time = sensor->sampleTime(m_sensorSampler->next1D());
+
+            /* Initialize the path endpoints */
+            m_emitterSubpath.initialize(m_scene, time, EImportance, m_pool);
+            m_sensorSubpath.initialize(m_scene, time, ERadiance, m_pool);
+
+            /* Determine the strategies */
+            SAssert(depth > 0);
+            int s, t, nStrats; // t = sensor, s = light source
+            {
+                /* Number of edges + 1 as
+                - the sensor is degenerate
+                - the light is not degenerate
+                it is impossible to have s = depth + 1 and t = 0 */
+                Float random_decision = m_directSampler->next1D();
+                if(VERBOSE) SLog(EInfo, "Random decision: %f", random_decision);
+
+                if(m_lightImage) {
+                    /* Due to s == depth + 1 and t == 0 */
+                    nStrats = depth + 1;
+                    /* s = [0, depth] */
+                    s = std::min(int(nStrats * random_decision), nStrats - 1);
+                    /* t = [1, depth + 1] */
+                    t = (nStrats - s);
+                } else {
+                    /* Due to s == depth + 1 and t == 0 */
+                    /* Due to s == depth and t == 1 (no emitter sampling) */
+                    nStrats = depth;
+                    /* s = [0, depth - 1] */
+                    s = std::min(int(nStrats * random_decision), nStrats - 1);
+                    /* t = [2, depth + 1] */
+                    t = 1 + (nStrats - s);
+
+                    SAssert(t >= 2);
+                    SAssert(s >= 0);
+                }
+                SAssert(t != 0);
+            }
+
+            list.setStrategy(s, t);
+
+            if(depth == 1) {
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return;
+            }
+
+            /* RR is disabled in MMLT */
+			/* trace both subpaths */
+            int t_sampled;
+            if (offset == Point2i(-1))
+                t_sampled = m_sensorSubpath.randomWalk(m_scene, m_sensorSampler,
+                                        t, t+1, ERadiance, m_pool);
+            else
+                t_sampled = m_sensorSubpath.randomWalkFromPixel(m_scene, m_sensorSampler,
+                                                    t, offset, t+1, m_pool);
+            int s_sampled = m_emitterSubpath.randomWalk(m_scene, m_emitterSampler, s,s+1, EImportance, m_pool);
+
+
+			/* Random walks did not meet the strategy constraint */
+            if(t_sampled != t) {
+                m_emitterSubpath.release(m_pool);
+                m_sensorSubpath.release(m_pool);
+                return; // No splats
+            }
+            if(s_sampled != s) {
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return; // No splats
+            }
+
+			/* Check if subpaths are connectable */ 
+            bool unconnectable = true;
+            for (size_t i=2; i<m_emitterSubpath.vertexCount(); ++i)
+                unconnectable &= !m_emitterSubpath.vertex(i)->isConnectable();
+
+            for (size_t i=2; i<m_sensorSubpath.vertexCount(); ++i)
+                unconnectable &= !m_sensorSubpath.vertex(i)->isConnectable();
+
+			/* Can't connect */
+            if(unconnectable) {
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return; // No splats
+            }
+
+            /* Sanity check that the depth is good*/
+            size_t current_depth = m_sensorSubpath.edgeCount();
+            current_depth += m_emitterSubpath.edgeCount();
+            current_depth -= 1; // Remove the 2 extra
+			if(current_depth != depth) {
+                SLog(EError, "Depth inconsistency: %i (!= %i)", current_depth, depth);
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return; // No splats
+            }
+
+            /* Compute the weights */
+            Spectrum weight = Spectrum(1.0);
+            for (size_t i=1; i<m_emitterSubpath.vertexCount(); ++i)
+                weight *= m_emitterSubpath.vertex(i-1)->weight[EImportance] *
+                        m_emitterSubpath.vertex(i-1)->rrWeight *
+                        m_emitterSubpath.edge(i-1)->weight[EImportance];
+            for (size_t i=1; i<m_sensorSubpath.vertexCount(); ++i)
+                weight *= m_sensorSubpath.vertex(i-1)->weight[ERadiance] *
+                        m_sensorSubpath.vertex(i-1)->rrWeight *
+                        m_sensorSubpath.edge(i-1)->weight[ERadiance];
+
+            PathVertex
+                    *vsPred = m_emitterSubpath.vertexOrNull(s-1),
+                    *vtPred = m_sensorSubpath.vertexOrNull(t-1),
+                    *vs = m_emitterSubpath.vertex(s),
+                    *vt = m_sensorSubpath.vertex(t);
+            PathEdge
+                    *vsEdge = m_emitterSubpath.edgeOrNull(s-1),
+                    *vtEdge = m_sensorSubpath.edgeOrNull(t-1);
+
+
+			/* Connect (or handle pure subpath)*/
+            Spectrum value;
+            Point2 samplePos(0.0f);
+            PathEdge connectionEdge;
+			/* Pure sensor path */
+            if (vs->isEmitterSupernode()) {
+                /* If possible, convert 'vt' into an emitter sample */
+                if (!vt->cast(m_scene, PathVertex::EEmitterSample) || vt->isDegenerate()) {
+                    m_sensorSubpath.release(m_pool);
+                    m_emitterSubpath.release(m_pool);
+                    return;
+                }
+
+                value = weight *
+                        vs->eval(m_scene, vsPred, vt, EImportance) *
+                        vt->eval(m_scene, vtPred, vs, ERadiance);
+            } 
+			
+			/* Pure emmiter path */
+			else if (vt->isSensorSupernode()) {
+                SAssert(t < 2);
+
+                if(VERBOSE) std::cout << "Cast?\n";
+                /* If possible, convert 'vs' into an sensor sample */
+                if (!vs->cast(m_scene, PathVertex::ESensorSample) || vs->isDegenerate()) {
+                    m_sensorSubpath.release(m_pool);
+                    m_emitterSubpath.release(m_pool);
+                    return;
+                }
+
+                /* Make note of the changed pixel sample position */
+                if (!vs->getSamplePosition(vsPred, samplePos)) {
+                    m_sensorSubpath.release(m_pool);
+                    m_emitterSubpath.release(m_pool);
+                    return;
+                }
+
+                value = weight *
+                        vs->eval(m_scene, vsPred, vt, EImportance) *
+                        vt->eval(m_scene, vtPred, vs, ERadiance);
+            } 
+			
+			/* Otherwise, connect */
+			else {
+                /* Can't connect degenerate endpoints */
+                if (vs->isDegenerate() || vt->isDegenerate()){
+                    m_sensorSubpath.release(m_pool);
+                    m_emitterSubpath.release(m_pool);
+                    return;
+                }
+
+                value = weight *
+                        vs->eval(m_scene, vsPred, vt, EImportance) *
+                        vt->eval(m_scene, vtPred, vs, ERadiance);
+
+                /* Temporarily force vertex measure to EArea. Needed to
+                   handle BSDFs with diffuse + specular components */
+                vs->measure = vt->measure = EArea;
+            }
+
+            /*For now it is not possible to handling null-interactions
+            This is a core problem for MMLT */
+            int interactions = m_maxDepth - depth;
+            if (value.isZero() || !connectionEdge.pathConnectAndCollapse(
+                    m_scene, vsEdge, vs, vt, vtEdge, interactions)) {
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return;
+            }
+
+			/* if exclude direct illumination, return nothing for direct path */
+            if (m_excludeDirectIllum && depth <= 2)
+            {
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return;
+            }
+
+            /* Account for the terms of the measurement contribution
+               function that are coupled to the connection edge */
+            value *= connectionEdge.evalCached(vs, vt, PathEdge::EGeneralizedGeometricTerm);
+
+            /* Compute the multiple importance sampling weight */
+            value *= Path::miWeight(m_scene, m_emitterSubpath, &connectionEdge,
+                                    m_sensorSubpath, s, t, m_sampleDirect, m_lightImage);
+
+            /* Because we have equal prob for all the strategies */
+            value *= nStrats;
+
+			/* Determine the pixel sample position when necessary */
+            if (vt->isSensorSample() && !vt->getSamplePosition(vs, samplePos))
+            {
+                m_sensorSubpath.release(m_pool);
+                m_emitterSubpath.release(m_pool);
+                return; // Not a valid splat
+            }
+
+            /* Register the splat in the good place */
+            if (t < 2) {
+                list.append(samplePos, value);
+            } else {
+                BDAssert(m_sensorSubpath.vertexCount() > 2);
+                Point2 SensorSamplePos(0.0f);
+                m_sensorSubpath.vertex(1)->getSamplePosition(m_sensorSubpath.vertex(2), SensorSamplePos);
+                list.append(SensorSamplePos, value);
+            }
+
+            /* Finished to do the work, break the switch */
+            m_sensorSubpath.release(m_pool);
+            m_emitterSubpath.release(m_pool);
+            break;
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+        }
 		case EBidirectional: {
 				/* Uniformly sample a scene time */
 				Float time = sensor->getShutterOpen();
@@ -294,6 +548,11 @@ void PathSampler::sampleSplats(const Point2i &offset, SplatList &list) {
 				RayDifferential sensorRay;
 				Spectrum value = sensor->sampleRayDifferential(
 					sensorRay, samplePos, apertureSample, timeSample);
+                // Disable the ray differential for texture filtering
+                // to get consistent results between BDPT and PT
+				if(true) {
+                    sensorRay.hasDifferentials = false;
+                }
 
 				RadianceQueryRecord rRec(m_scene, m_sensorSampler);
 				rRec.newQuery(
@@ -616,13 +875,22 @@ Float PathSampler::generateSeeds(size_t sampleCount, size_t seedCount,
 		_1, _2, _3, _4);
 
 	Float mean = 0.0f, variance = 0.0f;
+	Float tok = 0;
 	for (size_t i=0; i<sampleCount; ++i) {
 		size_t seedIndex = tempSeeds.size();
 		size_t sampleIndex = m_sensorSampler->getSampleIndex();
 		luminance = 0.0f;
 
+		int depth = -1;
+		if(m_technique == PathSampler::EMMLT) {
+		    // TODO: To get some simplification, we will allocated the same number of samples
+		    // per depth. The depth will be picked corresponding to the initial state value
+		    // Note that it is the same way MMLT is implemented with PBRT
+		    depth =  (i % m_maxDepth) + 1; // TODO: Depth == 0 is excluded for now
+		}
+
 		if (fineGrained) {
-			samplePaths(Point2i(-1), callback);
+		    samplePaths(Point2i(-1), callback);
 
 			/* Fine seed granularity (e.g. for Veach-MLT).
 			   Set the correct the sample index value */
@@ -630,23 +898,40 @@ Float PathSampler::generateSeeds(size_t sampleCount, size_t seedCount,
 				tempSeeds[j].sampleIndex = sampleIndex;
 		} else {
 			/* Run the path sampling strategy */
-			sampleSplats(Point2i(-1), splatList);
+			sampleSplats(Point2i(-1), splatList, depth);
 			luminance = splatList.luminance;
 			splatList.normalize(importanceMap);
 
-			/* Coarse seed granularity (e.g. for PSSMLT) */
+			if (std::isnan(luminance)) {
+                Log(EWarn, "Encountered a sample with luminance = %f during , ignoring! at bootstrap", luminance);
+                continue;
+			}
+			else {
+                tok++;
+			}
+
+			/* Coarse seed granularity (e.g. for MMLT) */
 			if (luminance != 0)
-				tempSeeds.push_back(PathSeed(sampleIndex, luminance));
+				tempSeeds.push_back([&]() -> PathSeed {
+				    auto ps = PathSeed(sampleIndex, luminance);
+			        ps.depth = depth;
+			        return ps;
+				}());
 		}
 
 		/* Numerically robust online variance estimation using an
 		   algorithm proposed by Donald Knuth (TAOCP vol.2, 3rd ed., p.232) */
 		Float delta = luminance - mean;
-		mean += delta / (Float) (i+1);
+        mean += delta / (Float) (tok);
 		variance += delta * (luminance - mean);
 	}
 	BDAssert(m_pool.unused());
-	Float stddev = std::sqrt(variance / (sampleCount-1));
+    Float stddev = std::sqrt(variance / (tok-1));
+
+	// TODO: Dirty fix for now
+	if(m_technique == EMMLT) {
+	    mean *= m_maxDepth; // As we split the path by corresponding depth
+	}
 
 	Log(EInfo, "Done -- average luminance value = %f, stddev = %f (took %i ms)",
 			mean, stddev, timer->getMilliseconds());

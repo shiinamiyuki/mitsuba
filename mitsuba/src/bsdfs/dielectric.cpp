@@ -394,6 +394,21 @@ public:
 		return 0.0f;
 	}
 
+	int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample, const Float roughtConst) const {
+	  pdf = 1.f;
+	  return -1; // Same decision for all
+	}
+
+    Float pdfComponent(const BSDFSamplingRecord& bRec) const {
+		if(bRec.component == -1) return 1.f;
+
+		Float cosThetaT;
+		Float F = fresnelDielectricExt(Frame::cosTheta(bRec.wi), cosThetaT, m_eta);
+		if(bRec.component == 0) return F;
+		else return 1-F;
+	}
+
 	std::string toString() const {
 		std::ostringstream oss;
 		oss << "SmoothDielectric[" << endl

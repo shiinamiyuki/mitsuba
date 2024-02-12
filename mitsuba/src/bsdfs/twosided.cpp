@@ -65,10 +65,10 @@ MTS_NAMESPACE_BEGIN
 class TwoSidedBRDF : public BSDF {
 public:
 	TwoSidedBRDF(const Properties &props)
-		: BSDF(props) { }
+			: BSDF(props) { }
 
 	TwoSidedBRDF(Stream *stream, InstanceManager *manager)
-		: BSDF(stream, manager) {
+			: BSDF(stream, manager) {
 		m_nestedBRDF[0] = static_cast<BSDF *>(manager->getInstance(stream));
 		m_nestedBRDF[1] = static_cast<BSDF *>(manager->getInstance(stream));
 		configure();
@@ -89,7 +89,7 @@ public:
 
 
 		m_usesRayDifferentials = m_nestedBRDF[0]->usesRayDifferentials()
-			|| m_nestedBRDF[1]->usesRayDifferentials();
+								 || m_nestedBRDF[1]->usesRayDifferentials();
 
 		m_components.clear();
 
@@ -102,19 +102,27 @@ public:
 		BSDF::configure();
 		if (m_combinedType & BSDF::ETransmission)
 			Log(EError, "Only materials without "
-				"a transmission component can be nested!");
+						"a transmission component can be nested!");
 	}
 
 	Spectrum eval(const BSDFSamplingRecord &bRec, EMeasure measure) const {
 		BSDFSamplingRecord b(bRec);
 
 		if (Frame::cosTheta(b.wi) > 0) {
+			if(b.component >= m_nestedBRDF[0]->getComponentCount()) {
+				return Spectrum(0.f);
+			}
 			return m_nestedBRDF[0]->eval(b, measure);
 		} else {
-			if (b.component != -1)
-				b.component -= m_nestedBRDF[0]->getComponentCount();
+			if (b.component != -1) {
+                b.component -= m_nestedBRDF[0]->getComponentCount();
+            }
 			b.wi.z *= -1;
 			b.wo.z *= -1;
+            if(b.component >= m_nestedBRDF[1]->getComponentCount()
+            || b.component < -1) {
+                return Spectrum(0.f);
+            }
 			return m_nestedBRDF[1]->eval(b, measure);
 		}
 	}
@@ -207,7 +215,45 @@ public:
 			return m_nestedBRDF[0]->getRoughness(its, component);
 		} else {
 			return m_nestedBRDF[1]->getRoughness(its, component
-			      -m_nestedBRDF[0]->getComponentCount());
+													  -m_nestedBRDF[0]->getComponentCount());
+		}
+	}
+
+	int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample, const Float roughtConst) const override {
+      // component index is from 0 to total components in both BSDF - 1.
+	  if (Frame::cosTheta(bRec.wi) < 0) {
+          BSDFSamplingRecord bRecFlipped(bRec);
+		  bRecFlipped.wi.z *= -1;
+          bRecFlipped.wo.z *= -1;
+
+	      int component = m_nestedBRDF[1]->sampleComponent(bRecFlipped, pdf, sample, roughtConst);
+		  if (component != -1)
+		  		component += m_nestedBRDF[0]->getComponentCount();
+          return component;
+      }
+      else {
+          return m_nestedBRDF[0]->sampleComponent(bRec, pdf, sample, roughtConst);
+      }
+	}
+
+	Float pdfComponent(const BSDFSamplingRecord& bRec) const {
+		if(bRec.component == -1) {
+			return 1.0;
+		}
+
+		BSDFSamplingRecord b(bRec);
+		if (b.wi.z > 0) {
+			if(b.component >= m_nestedBRDF[0]->getComponentCount()) return 0.f;
+			return m_nestedBRDF[0]->pdfComponent(b);
+		} else {
+			if (b.component != -1)
+				b.component -= m_nestedBRDF[0]->getComponentCount();
+			if(b.component < 0 ||
+			   b.component >= m_nestedBRDF[1]->getComponentCount()) return 0.f;
+			b.wi.z *= -1;
+			b.wo.z *= -1;
+			return m_nestedBRDF[1]->pdfComponent(b);
 		}
 	}
 

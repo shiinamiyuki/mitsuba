@@ -332,7 +332,7 @@ extern MTS_EXPORT_CORE bool solveLinearSystem2x2(const Float a[2][2], const Floa
  * \ingroup libpython
  */
 extern MTS_EXPORT_CORE void coordinateSystem(const Vector &a, Vector &b, Vector &c);
-
+extern MTS_EXPORT_CORE void coordinateSystemCoherent(const Vector &a, Vector &b, Vector &c);
 
 /**
  * \brief Given a smoothly varying shading normal and a tangent of a shape parameterization,

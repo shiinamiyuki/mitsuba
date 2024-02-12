@@ -305,14 +305,14 @@ public:
 			Vector H = sphericalDirection(thetaH, phiH);
 			bRec.wo = H * (2.0f * dot(bRec.wi, H)) - bRec.wi;
 
-			bRec.sampledComponent = 1;
+			bRec.sampledComponent = 0;
 			bRec.sampledType = EGlossyReflection;
 
 			if (Frame::cosTheta(bRec.wo) <= 0.0f)
 				return Spectrum(0.0f);
 		} else {
 			bRec.wo = warp::squareToCosineHemisphere(sample);
-			bRec.sampledComponent = 0;
+			bRec.sampledComponent = 1;
 			bRec.sampledType = EDiffuseReflection;
 		}
 		bRec.eta = 1.0f;
@@ -366,6 +366,40 @@ public:
 		else
 			return std::numeric_limits<Float>::infinity();
 	}
+
+	int sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+					  Point2 &sample, const Float roughtConst) const
+	{
+		// All component say "say", so select all
+		if(getRoughness(bRec.its, 0) >= roughtConst) {
+			pdf = 1;
+			return -1;
+		} else {
+			if (sample.x <= m_specularSamplingWeight) {
+				sample.x /= m_specularSamplingWeight;
+				pdf = m_specularSamplingWeight;
+				return 0; // Select "specular"
+			} else {
+				sample.x = (sample.x - m_specularSamplingWeight)
+						/ (1-m_specularSamplingWeight);
+				pdf = (1-m_specularSamplingWeight);
+				return 1; // Select diffuse
+			}
+		}
+	}
+
+    Float pdfComponent(const BSDFSamplingRecord &bRec) const {
+        switch (bRec.component) {
+        case -1: 
+            return 1.0f;
+        case 0: 
+            return m_specularSamplingWeight;
+        case 1: 
+            return 1.0f - m_specularSamplingWeight;
+        default: 
+            return 0;
+        }
+    }
 
 	Shader *createShader(Renderer *renderer) const;
 

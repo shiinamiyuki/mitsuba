@@ -21,10 +21,13 @@
 #include "pssmlt_proc.h"
 #include "pssmlt_sampler.h"
 
+#include "../pssmlt_utils.h"
+
 MTS_NAMESPACE_BEGIN
 
+
 /* ==================================================================== */
-/*                         Worker implementation                        */
+/*                         Rendering Statistics                         */
 /* ==================================================================== */
 
 StatsCounter largeStepRatio("Primary sample space MLT",
@@ -36,10 +39,14 @@ StatsCounter acceptanceRate("Primary sample space MLT",
 StatsCounter forcedAcceptance("Primary sample space MLT",
 	"Number of forced acceptances");
 
+/* ==================================================================== */
+/*                         Worker implementation                        */
+/* ==================================================================== */
+
 class PSSMLTRenderer : public WorkProcessor {
 public:
-	PSSMLTRenderer(const PSSMLTConfiguration &conf)
-		: m_config(conf) {
+	PSSMLTRenderer(const PSSMLTConfiguration &conf, ref_vector<ReplayableSampler> rplSamplers)
+		: m_config(conf), m_rplSamplers(rplSamplers) {
 	}
 
 	PSSMLTRenderer(Stream *stream, InstanceManager *manager)
@@ -62,7 +69,11 @@ public:
 
 	void prepare() {
 		Scene *scene = static_cast<Scene *>(getResource("scene"));
+		
 		m_origSampler = static_cast<PSSMLTSampler *>(getResource("sampler"));
+		m_sensorSampler = new PSSMLTSampler(m_origSampler);
+		m_emitterSampler = new PSSMLTSampler(m_origSampler);
+		m_directSampler = new PSSMLTSampler(m_origSampler);
 		m_sensor = static_cast<Sensor *>(getResource("sensor"));
 		m_scene = new Scene(scene);
 		m_film = m_sensor->getFilm();
@@ -74,15 +85,26 @@ public:
 		m_scene->wakeup(NULL, m_resources);
 		m_scene->initializeBidirectional();
 
-		m_rplSampler = static_cast<ReplayableSampler*>(
-			static_cast<Sampler *>(getResource("rplSampler"))->clone().get());
-		m_sensorSampler = new PSSMLTSampler(m_origSampler);
-		m_emitterSampler = new PSSMLTSampler(m_origSampler);
-		m_directSampler = new PSSMLTSampler(m_origSampler);
+        // Clone all the rplSampler to avoid any race condition between the threads
+        ref_vector<ReplayableSampler> cloned_rplSamplers;
+        for(auto i = 0; i < m_rplSamplers.size(); i++) {
+            auto tmp = m_rplSamplers[i]->clone();
+            auto cast = (ReplayableSampler*)tmp.get();
+            cloned_rplSamplers.push_back(cast);
+        }
+        m_rplSamplers = cloned_rplSamplers;
 
-		m_pathSampler = new PathSampler(m_config.technique, m_scene,
-			m_emitterSampler, m_sensorSampler, m_directSampler, m_config.maxDepth,
-			m_config.rrDepth, m_config.separateDirect, m_config.directSampling);
+
+		m_pathSampler = new PathSampler(m_config.technique, 
+										m_scene,
+										m_emitterSampler, 
+										m_sensorSampler, 
+										m_directSampler, 
+										m_config.maxDepth,
+										m_config.rrDepth, 
+										m_config.separateDirect, 
+										m_config.directSampling, 
+										m_config.lightImage);
 	}
 
 	void process(const WorkUnit *workUnit, WorkResult *workResult, const bool &stop) {
@@ -91,71 +113,94 @@ public:
 		const PathSeed &seed = wu->getSeed();
 		SplatList *current = new SplatList(), *proposed = new SplatList();
 
+		/* Is -1 by default, a certain value for MMLT */
+		int depth = seed.depth;
+        {
+            auto maxDim = findMaxDimensions(m_scene, m_config.maxDepth, m_config.rrDepth, depth,
+                                            m_config.technique, m_config.directSampling);
+            m_sensorSampler->setMaxDim(maxDim.sensor);
+            m_emitterSampler->setMaxDim(maxDim.emitter);
+            m_directSampler->setMaxDim(maxDim.direct);
+        }
+
+		/* Set mutation type (Kelemen or Gaussian) */
+		m_emitterSampler->setMutationType(m_config.kelemenStyleMutation);
+        m_sensorSampler->setMutationType(m_config.kelemenStyleMutation);
+        m_directSampler->setMutationType(m_config.kelemenStyleMutation);
+
 		m_emitterSampler->reset();
 		m_sensorSampler->reset();
 		m_directSampler->reset();
-		m_sensorSampler->setRandom(m_rplSampler->getRandom());
-		m_emitterSampler->setRandom(m_rplSampler->getRandom());
-		m_directSampler->setRandom(m_rplSampler->getRandom());
+		m_sensorSampler->setRandom(m_rplSamplers[seed.sampler_id]->getRandom());
+		m_emitterSampler->setRandom(m_rplSamplers[seed.sampler_id]->getRandom());
+		m_directSampler->setRandom(m_rplSamplers[seed.sampler_id]->getRandom());
 
 		/* Generate the initial sample by replaying the seeding random
-		   number stream at the appropriate position. Afterwards, revert
-		   back to this worker's own source of random numbers */
-		m_rplSampler->setSampleIndex(seed.sampleIndex);
-
-		m_pathSampler->sampleSplats(Point2i(-1), *current);
+		number stream at the appropriate position. Afterwards, revert
+		back to this worker's own source of random numbers */
+		m_rplSamplers[seed.sampler_id]->setSampleIndex(seed.sampleIndex);
+        m_sensorSampler->setReplay(true);
+        m_emitterSampler->setReplay(true);
+        m_directSampler->setReplay(true);
+		m_pathSampler->sampleSplats(Point2i(-1), *current, depth);
+        m_sensorSampler->setReplay(false);
+        m_emitterSampler->setReplay(false);
+        m_directSampler->setReplay(false);
 		result->clear();
 
 		ref<Random> random = m_origSampler->getRandom();
 		m_sensorSampler->setRandom(random);
 		m_emitterSampler->setRandom(random);
 		m_directSampler->setRandom(random);
-		m_rplSampler->updateSampleIndex(m_rplSampler->getSampleIndex()
-			+ m_sensorSampler->getSampleIndex()
-			+ m_emitterSampler->getSampleIndex()
-			+ m_directSampler->getSampleIndex());
+		m_rplSamplers[seed.sampler_id]->updateSampleIndex(m_rplSamplers[seed.sampler_id]->getSampleIndex()
+											+ m_sensorSampler->getSampleIndex()
+											+ m_emitterSampler->getSampleIndex()
+											+ m_directSampler->getSampleIndex());
 
+		/* set replayed state as current */
 		m_sensorSampler->accept();
 		m_emitterSampler->accept();
 		m_directSampler->accept();
 
 		/* Sanity check -- the luminance should match the one from
-		   the warmup phase - an error here would indicate inconsistencies
-		   regarding the use of random numbers during sample generation */
+		the warmup phase - an error here would indicate inconsistencies
+		regarding the use of random numbers during sample generation */
 		if (std::abs((current->luminance - seed.luminance)
 				/ seed.luminance) > Epsilon)
 			Log(EError, "Error when reconstructing a seed path: luminance "
 				"= %f, but expected luminance = %f", current->luminance, seed.luminance);
-
-		ref<Timer> timer = new Timer();
+		current->normalize(m_config.importanceMap);
 
 		/* MLT main loop */
 		Float cumulativeWeight = 0;
-		current->normalize(m_config.importanceMap);
+		ref<Timer> timer = new Timer();
 		for (uint64_t mutationCtr=0; mutationCtr<m_config.nMutations && !stop; ++mutationCtr) {
 			if (wu->getTimeout() > 0 && (mutationCtr % 8192) == 0
 					&& (int) timer->getMilliseconds() > wu->getTimeout())
 				break;
 
+			/* Check if large step, if so set it */
 			bool largeStep = random->nextFloat() < m_config.pLarge;
 			m_sensorSampler->setLargeStep(largeStep);
 			m_emitterSampler->setLargeStep(largeStep);
 			m_directSampler->setLargeStep(largeStep);
 
-			m_pathSampler->sampleSplats(Point2i(-1), *proposed);
+			/* Generate/Trace proposal */
+			m_pathSampler->sampleSplats(Point2i(-1), *proposed, depth);
 			proposed->normalize(m_config.importanceMap);
 
+			/* Accept through regular MH. */
 			Float a = std::min((Float) 1.0f, proposed->luminance / current->luminance);
-
 			if (std::isnan(proposed->luminance) || proposed->luminance < 0) {
 				Log(EWarn, "Encountered a sample with luminance = %f, ignoring!",
 						proposed->luminance);
 				a = 0;
 			}
 
+
+			/* Compute splatting weights and test for acceptance */
 			bool accept;
 			Float currentWeight, proposedWeight;
-
 			if (a > 0) {
 				if (m_config.kelemenStyleWeights && !m_config.importanceMap) {
 					/* Kelemen-style MLT weights (these don't work for 2-stage MLT) */
@@ -178,8 +223,9 @@ public:
 				proposedWeight = 0;
 				accept = false;
 			}
-
 			cumulativeWeight += currentWeight;
+
+			/* if accepted, splat accumulated current and swap */
 			if (accept) {
 				for (size_t k=0; k<current->size(); ++k) {
 					Spectrum value = current->getValue(k) * cumulativeWeight;
@@ -193,6 +239,8 @@ public:
 				m_sensorSampler->accept();
 				m_emitterSampler->accept();
 				m_directSampler->accept();
+
+				/* Stats computation */
 				if (largeStep) {
 					largeStepRatio.incrementBase(1);
 					++largeStepRatio;
@@ -202,7 +250,9 @@ public:
 				}
 				acceptanceRate.incrementBase(1);
 				++acceptanceRate;
-			} else {
+			} 
+			/* if rejected, splat proposed and reject */
+			else {
 				for (size_t k=0; k<proposed->size(); ++k) {
 					Spectrum value = proposed->getValue(k) * proposedWeight;
 					if (!value.isZero())
@@ -212,6 +262,8 @@ public:
 				m_sensorSampler->reject();
 				m_emitterSampler->reject();
 				m_directSampler->reject();
+
+				/* Stats computation */
 				acceptanceRate.incrementBase(1);
 				if (largeStep)
 					largeStepRatio.incrementBase(1);
@@ -227,13 +279,13 @@ public:
 				result->put(current->getPosition(k), &value[0]);
 		}
 
-
+		/* empty heap */
 		delete current;
 		delete proposed;
 	}
 
 	ref<WorkProcessor> clone() const {
-		return new PSSMLTRenderer(m_config);
+		return new PSSMLTRenderer(m_config, m_rplSamplers);
 	}
 
 	MTS_DECLARE_CLASS()
@@ -247,7 +299,7 @@ private:
 	ref<PSSMLTSampler> m_sensorSampler;
 	ref<PSSMLTSampler> m_emitterSampler;
 	ref<PSSMLTSampler> m_directSampler;
-	ref<ReplayableSampler> m_rplSampler;
+    ref_vector<ReplayableSampler> m_rplSamplers;
 };
 
 /* ==================================================================== */
@@ -256,8 +308,8 @@ private:
 
 PSSMLTProcess::PSSMLTProcess(const RenderJob *parent, RenderQueue *queue,
 	const PSSMLTConfiguration &conf, const Bitmap *directImage,
-	const std::vector<PathSeed> &seeds) : m_job(parent), m_queue(queue),
-		m_config(conf), m_progress(NULL), m_seeds(seeds) {
+	const std::vector<PathSeed> &seeds, ref_vector<ReplayableSampler> rplSamplers) : m_job(parent), m_queue(queue),
+		m_config(conf), m_progress(NULL), m_seeds(seeds), m_rplSamplers(rplSamplers) {
 	m_directImage = directImage;
 	m_timeoutTimer = new Timer();
 	m_refreshTimer = new Timer();
@@ -268,7 +320,7 @@ PSSMLTProcess::PSSMLTProcess(const RenderJob *parent, RenderQueue *queue,
 }
 
 ref<WorkProcessor> PSSMLTProcess::createWorkProcessor() const {
-	return new PSSMLTRenderer(m_config);
+	return new PSSMLTRenderer(m_config, m_rplSamplers);
 }
 
 void PSSMLTProcess::develop() {
@@ -326,7 +378,7 @@ ParallelProcess::EStatus PSSMLTProcess::generateWork(WorkUnit *unit, int worker)
 	int timeout = 0;
 	if (m_config.timeout > 0) {
 		timeout = static_cast<int>(static_cast<int64_t>(m_config.timeout*1000) -
-		          static_cast<int64_t>(m_timeoutTimer->getMilliseconds()));
+		        	static_cast<int64_t>(m_timeoutTimer->getMilliseconds()));
 	}
 
 	if (m_workCounter >= m_config.workUnits || timeout < 0)

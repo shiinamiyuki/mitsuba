@@ -17,6 +17,7 @@
 */
 
 #include <mitsuba/bidir/rsampler.h>
+#include <mitsuba/core/random.h>
 
 MTS_NAMESPACE_BEGIN
 
@@ -27,6 +28,15 @@ ReplayableSampler::ReplayableSampler() : Sampler(Properties()) {
 	m_sampleCount = 0;
 	m_sampleIndex = 0;
 }
+
+ReplayableSampler::ReplayableSampler(Random* random) : Sampler(Properties()) {
+    m_initial = new Random(random);
+    m_random = new Random(random);
+    m_random->set(m_initial);
+    m_sampleCount = 0;
+    m_sampleIndex = 0;
+}
+
 
 ReplayableSampler::ReplayableSampler(Stream *stream, InstanceManager *manager)
 	: Sampler(stream, manager) {

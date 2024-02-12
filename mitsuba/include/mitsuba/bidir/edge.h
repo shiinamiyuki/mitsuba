@@ -124,7 +124,7 @@ struct MTS_EXPORT_BIDIR PathEdge {
 	 */
 	bool sampleNext(const Scene *scene, Sampler *sampler,
 			const PathVertex *pred, const Ray &ray, PathVertex *next,
-			ETransportMode mode);
+			ETransportMode mode, bool longBeam = false, bool noReject = false);
 
 	/**
 	 * \brief Create a perturbed successor vertex and edge
@@ -202,7 +202,21 @@ struct MTS_EXPORT_BIDIR PathEdge {
 	 *     The successor vertex of this edge
 	 */
 	Spectrum evalCached(const PathVertex *pred, const PathVertex *succ,
-			unsigned int what) const;
+			unsigned int what, const bool connectable = false) const;
+
+	/**
+	 * \brief Evaluate the cosine factors associated with the geometric term over an edge. The cosine factor is
+	 * computed for the given base vertex and uses the shading normal.
+	 *
+	 * Note: The isConnectable property of the vertex is ignored.
+	 *
+	 * \param vertex
+	 *     Pointer to a vertex which defines one of the edge endpoints
+	 *
+	 * \return The cosine factor at vertex for the given edge instance
+	 *
+	 */
+	Float evalCosine(const PathVertex *vertex) const;
 
 	/**
 	 * \brief Compute the density of a successor node
@@ -227,6 +241,38 @@ struct MTS_EXPORT_BIDIR PathEdge {
 	 * \return The computed probability density
 	 */
 	Float evalPdf(const PathVertex *pred, const PathVertex *succ) const;
+
+	/**
+	 * \brief Evaluate the geometric term for the edge. To be consistent with the sampling methods and PDF conversion
+	 * from solid angle to area, the cosine term at the first vertex is evaluated using the shading normal, while the
+	 * geometric normal is used at the successor vertex. Note that this makes the function not symmetric!
+	 *
+	 * Note: The isConnectable property of the vertex is ignored.
+	 *
+	 * \param pred
+	 *     Pointer to the preceding vertex
+	 * \param succ
+	 *     Pointer to the successor vertex
+	 *
+	 * \return Returns the geometric term (geometry factor) between the two vertices connected by the edge instance
+	 *
+	 */
+	Float evalGeoterm(const PathVertex *pred, const PathVertex *succ) const;
+
+	/**
+	 * \brief Evaluate the parts of the geometric term that converts from solid angle to area measure assuming that the
+	 * cosine term at a base vertex is already included. It uses the geometric normal to be consistent with the solid
+	 * angle to area conversion in the evalPdf method of the vertex class.
+	 *
+	 * Note: The isConnectable property of the vertex is ignored.
+	 *
+	 * \param succ
+	 *     Pointer to the successor vertex
+	 *
+	 * \return Returns the product of the cosine term at the successor vertex and the inverse squared distance of the edge instance
+	 *
+	 */
+	Float evaldA(const PathVertex *succ) const;
 
 	/**
 	 * \brief Compute the transmittance between an arbitrary
@@ -319,6 +365,10 @@ struct MTS_EXPORT_BIDIR PathEdge {
 	bool connect(const Scene *scene, const PathEdge *predEdge,
 		const PathVertex *vs, const PathVertex *vt,
 		const PathEdge *succEdge);
+        
+        bool connectIgnoreVisibility(const Scene *scene, const PathEdge *predEdge,
+		const PathVertex *vs, const PathVertex *vt,
+		const PathEdge *succEdge);
 
 	/**
 	 * \brief Create a connection path between two vertices
@@ -408,7 +458,7 @@ struct MTS_EXPORT_BIDIR PathEdge {
 	 */
 	bool pathConnectAndCollapse(const Scene *scene, const PathEdge *predEdge,
 		const PathVertex *vs, const PathVertex *vt,
-		const PathEdge *succEdge, int &interactions);
+		const PathEdge *succEdge, int &interactions, bool ignore_visibility = false);
 
 	/// Create a deep copy of this edge
 	PathEdge *clone(MemoryPool &pool) const;

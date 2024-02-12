@@ -43,7 +43,8 @@ public:
 	/// Time value associated with the medium scattering event
 	Float time;
 
-	/// Local particle orientation at \ref p
+	/// Local particle orientation at \ref p for heterogeneous media
+    /// Note that this is not the incident/out-going direction of light path at the scattering location
 	Vector orientation;
 
 	/**
@@ -87,14 +88,23 @@ public:
 	/// Pointer to the associated medium
 	const Medium *medium;
 
+  	/// Random number used to sample the media
+  	Float randNumber;
+
 public:
-	inline MediumSamplingRecord() : medium(NULL) { }
+	inline MediumSamplingRecord() : medium(NULL), randNumber(-1) { }
 
 	/// Return a pointer to the phase function
 	inline const PhaseFunction *getPhaseFunction() const;
 
 	/// Return a string representation
 	std::string toString() const;
+};
+
+enum EDistanceSampling {
+  EDistanceNormal, // Sampling the medium with the classical routine
+  EDistanceLong, // Sampling the medium with long
+  EDistanceAlwaysValid, // Sampling the medium with always valid positions
 };
 
 /** \brief Abstract participating medium
@@ -118,7 +128,9 @@ public:
 	 *                 no interaction inside the medium could be sampled.
 	 */
 	virtual bool sampleDistance(const Ray &ray,
-		MediumSamplingRecord &mRec, Sampler *sampler) const = 0;
+								MediumSamplingRecord &mRec, Sampler *sampler,
+								EDistanceSampling strategy = EDistanceNormal,
+								const Float randomNumber = -1) const = 0;
 
 	/**
 	 * \brief Compute the 1D density of sampling distance \a ray.maxt
@@ -132,7 +144,8 @@ public:
 	 * supplied ray segment within \a mRec.
 	 */
 	virtual void eval(const Ray &ray,
-		MediumSamplingRecord &mRec) const = 0;
+		MediumSamplingRecord &mRec,
+		EDistanceSampling strategy = EDistanceNormal) const = 0;
 
 	//! @}
 	// =============================================================
@@ -156,6 +169,11 @@ public:
 
 	/// Determine whether the medium is homogeneous
 	virtual bool isHomogeneous() const = 0;
+    /** In case that we are interested only on volume rendering,
+     * we can call this function to change the probability to sample an event
+     * inside the volume.
+     */
+  	virtual void computeOnlyVolumeInteraction() = 0;
 
 	/// For homogeneous media: return the absorption coefficient
 	inline const Spectrum &getSigmaA() const { return m_sigmaA; }
@@ -165,6 +183,9 @@ public:
 
 	/// For homogeneous media: return the extinction coefficient
 	inline const Spectrum &getSigmaT() const { return m_sigmaT; }
+
+	/// Check if there is medium (density != 0) at this particular location
+	virtual bool isMedium(const Point& p) const = 0;
 
 	//! @}
 	// =============================================================

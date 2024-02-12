@@ -41,29 +41,34 @@ public:
 	 * \brief Initialize the specular manifold with the specified
 	 * path segment
 	 */
-	bool init(const Path &path, int start, int end);
+	bool init(const Path &path, size_t start, size_t end);
 
 	/**
 	 * \brief Update the provided path segment based on the stored
 	 * specular manifold configuration
 	 */
-	bool update(Path &path, int start, int end);
+	bool update(const Path &source, Path &path, size_t start, size_t end, bool adjointCorr = true, bool gvpm = false);
+	bool updateAll(Path &path, int start, int end);
 
-	/// Attempt to move the movable endpoint vertex to position \c target
-	bool move(const Point &target, const Normal &normal);
+  	/// Attempt to move the movable endpoint vertex to position \c target
+	bool move(const Point &target, const Normal &normal,
+			  Float kernelRadius = 0.f,
+			  const Point& gpPos = Point(0.f));
+
 
 	/**
 	 * \brief Compute the generalized geometric term between 'a' and 'b'
 	 */
-	Float G(const Path &path, int a, int b);
+	Float G(const Path &path, size_t a, size_t b);
 
 	/**
 	 * \brief Compute a product of standard and generalized geometric
 	 * terms between 'a' and 'b' depending on whether vertices are
 	 * specular or non-specular.
 	 */
-	Float multiG(const Path &path, int a, int b);
+	Float multiG(const Path &path, size_t a, size_t b);
 
+    Float det(const Path &path, int b, int c);
 	Float det(const Path &path, int a, int b, int c);
 
 	/// Return the number of iterations used by \ref move()
@@ -114,7 +119,7 @@ private:
 		Matrix2x2 a, b, c, u;
 
 		/* Manifold tangent space projected onto this vertex */
-		Matrix2x2 Tp;
+		Matrix2x2 Tp;       // for last vertex
 
 		/// Initialize certain fields to zero by default
 		inline SimpleVertex(EType type, const Point &p) :
@@ -140,13 +145,14 @@ private:
 	 */
 	bool computeTangents();
 
-	void check(SimpleVertex *v);
 protected:
 	const Scene *m_scene;
 	Float m_time;
 	int m_iterations, m_maxIterations;
 
-	std::vector<SimpleVertex> m_vertices, m_proposal;
+    /// m_vertices stores the path initialized. It is also used as a 
+    /// ping-pong buffer during move(). 
+    std::vector<SimpleVertex> m_vertices, m_proposal; 
 };
 
 MTS_NAMESPACE_END

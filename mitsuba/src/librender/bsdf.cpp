@@ -79,6 +79,20 @@ Float BSDF::getRoughness(const Intersection &its, int component) const {
 	NotImplementedError("getRoughness");
 }
 
+int BSDF::sampleComponent(const BSDFSamplingRecord &bRec, Float &pdf,
+                          Point2 &sample, const Float roughtConst) const {
+    NotImplementedError("sampleComponent");
+}
+Float BSDF::pdfComponent(const BSDFSamplingRecord &bRec) const {
+	if(getComponentCount() == 0 ||
+		getComponentCount() == 1||
+		bRec.component == -1)
+		return 1.f;
+	NotImplementedError("pdfComponent: not -1 and several component.");
+	return 1.f;
+}
+
+
 Spectrum BSDF::getDiffuseReflectance(const Intersection &its) const {
 	BSDFSamplingRecord bRec(its, Vector(0, 0, 1), Vector(0, 0, 1));
 	bRec.typeMask = EDiffuseReflection;
